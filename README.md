@@ -186,8 +186,8 @@ docs/img/                   README 用的图
 ```
 
 - 提交前密钥扫描：`node tool/scan-secrets.mjs`（gitleaks 扫历史与暂存区；`--staged` 只扫暂存）。
-- 自测：`node tool/test/selftest.mjs`（66 条，含 OpenCode 投影、setup 宿主检测与隔离 HOME 端到端装/撤、Skill 与命令面漂移守卫）。
-- 几条不能破的纪律：**正文不搬进账本**、**闸门不过就不写**、**没验过的不说通过**、**hook 只读**。细则见仓库根 `RULES.md`。
+- 自测：`node tool/test/selftest.mjs <会话.jsonl>`（66 条；不给会话时用 `CONVLEDGER_SELFTEST_SESSION` 或本机默认，公开仓需自带一个样本）。
+- 几条不能破的纪律：**正文不搬进账本**、**闸门不过就不写**、**没验过的不说通过**、**hook 只读**。
 
 ## 免责声明
 
