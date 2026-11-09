@@ -69,8 +69,9 @@
 ```bash
 # 1) 装 Node ≥20（接 OpenCode 要 22.5，低于它只是那一家来源跳过）
 # 2) 克隆仓库
-git clone git@github.com:zhl110/convledger.git
+git clone https://github.com/zhl110/convledger.git
 cd convledger
+# 已配 SSH 的也可以用：git clone git@github.com:zhl110/convledger.git
 
 # 3) 装起来
 #    Windows：双击 install.cmd（或跑下面这条）
