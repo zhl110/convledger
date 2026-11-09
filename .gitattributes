@@ -1,0 +1,9 @@
+# 行尾统一：shell 脚本与钩子必须 LF，否则 Windows 检出后在 WSL/Linux 上 shebang 会坏
+*.sh text eol=lf
+.githooks/* text eol=lf
+
+# 其余交给 auto（Windows 上文本文件可 CRLF）
+*.mjs text eol=lf
+*.js text eol=lf
+*.css text eol=lf
+*.html text eol=lf

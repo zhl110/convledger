@@ -1,0 +1,34 @@
+# 六家外部参考仓的克隆（~457MB，各自带 .git）：研究素材不是我们的代码，只读、不入库
+reference/
+
+# 派生账本与评测中间产物：`convledger index --all` 可从本机会话日志整目录重建
+tool/out/
+
+# 本机凭据与密钥：补一条就可能挡住一次事故（2026-11-09）
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+id_rsa*
+id_ed25519*
+.npmrc
+.auth/
+.dsh/
+credentials*.json
+*credential*.yaml
+*secret*.json
+*secret*.yaml
+
+# 派生导出：PROGRESS/画像/会话笔记含本机路径与命令回执，不入库
+convledger-export/
+
+# 系统与编辑器噪声
+.DS_Store
+Thumbs.db
+
+# 实验派生输出（逐次运行可重建；本机保留在 reference/experiments-out/）
+experiments/*/out/
+tool/test/routing-gate.json

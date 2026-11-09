@@ -1,0 +1,17 @@
+{
+  "name": "convledger",
+  "version": "0.1.0",
+  "private": true,
+  "description": "带锚点的会话结构账本 — 边聊边压、压完还能溯源回原文",
+  "type": "module",
+  "bin": {
+    "convledger": "bin/convledger.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "selftest": "node test/selftest.mjs"
+  },
+  "dependencies": {}
+}

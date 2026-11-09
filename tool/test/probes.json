@@ -1,0 +1,21 @@
+{
+  "_source": "experiments/compaction-anchor/probe-set.mjs + ANSWER-KEY.md；P15 已剔除（它的比例是压缩之后才算出来的，边界前的日志里不存在，任何条件都不可能答对）；P16 的标准答案按实验一的更正改为边界前 71 次",
+  "session": "demo0001-838b-4697-95fc-9756c7ce93eb",
+  "probes": [
+    { "id": "P01", "type": "text", "q": "原型乙 桌面壳的真实版本号是多少？它记在哪个文件的第 4 行？", "a": ["desktop/package.json:4", "0.5.24"] },
+    { "id": "P02", "type": "text", "q": "原型乙 每个画布在 IndexedDB 里的 key 前缀是什么？写在哪一行？", "a": ["原型乙:project:", "src/store/projects.ts:20"] },
+    { "id": "P03", "type": "text", "q": "原型乙 大附件 vault 的源文件路径是什么？", "a": ["src/lib/attachment-vault.ts"] },
+    { "id": "P04", "type": "text", "q": "认知动作五选一标签（INSIGHT/RULEOUT/DECISION/PIVOT/OPEN）定义在哪个文件第几行？", "a": ["src/lib/ladder.ts:46"] },
+    { "id": "P05", "type": "text", "q": "2026-10-22「全部 Claude Code 答案没有牌匾」那次事故的复盘注释写在哪文件的哪几行？", "a": ["src/lib/background-model.ts:22"] },
+    { "id": "P06", "type": "text", "q": "原型乙 的 zustand slice 组合写在哪个文件哪些行？", "a": ["src/store/index.ts:38"] },
+    { "id": "P07", "type": "text", "q": "原型丙 的 memory 在正常 send 时不注入，但在哪条代码路径会被注入（文档矛盾点）？给出文件名。", "a": ["replay", "create-session.ts"] },
+    { "id": "P08", "type": "text", "q": "原型己 的布局节点尺寸写死成多少，导致与 CSS 的 400–500 不符而重叠？", "a": ["350"] },
+    { "id": "P09", "type": "text", "q": "原型乙 的 CLI 库文件叫什么、多少行？", "a": ["cli/src/lib.ts", "1605"] },
+    { "id": "P10", "type": "text", "q": "原型戊 的 merge 只实现了哪一种？文档写了但代码里根本不存在的两种是什么？", "a": ["explicit", "linear"] },
+    { "id": "P11", "type": "event", "q": "用户中途打断并否决过一次操作。被否决的是什么？用户原话怎么说的？", "a": ["不是给dsh装上"] },
+    { "id": "P12", "type": "event", "q": "用户第一条消息对「怎么读这几个项目」提了哪两条明确要求？", "a": ["逆向", "一个一个"] },
+    { "id": "P13", "type": "structure", "q": "六个逆向子代理是同一次并行 fan-out 发起的吗？挂在主会话第几回合？", "a": ["turn 17", "第17", "第 17"] },
+    { "id": "P14", "type": "structure", "q": "第一次压缩前这个会话的上下文总量是多少 token、多少条消息被摘要取代？", "a": ["170947", "170,947", "239"] },
+    { "id": "P16", "type": "structure", "q": "到第一次压缩边界为止，这个会话发生了多少次工具调用？", "a": ["71"] }
+  ]
+}

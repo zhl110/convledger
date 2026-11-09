@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="convledger">
+  <!-- 小尺寸版：去掉书脊内线、空心环节点收成实心，锚钩简化，保证 16px 还认得出 -->
+  <g fill="none" stroke="currentColor" stroke-width="15" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M74 50 H186 C206 50 220 64 220 84 V160 C220 180 206 194 186 194 H120 L94 216 V194 H74 C54 194 40 180 40 160 V84 C40 64 54 50 74 50 Z"/>
+    <path d="M104 162 L186 104" stroke-width="13"/>
+    <path d="M104 162 H186" stroke-width="13"/>
+    <path d="M186 104 V150" stroke-width="13"/>
+    <path d="M172 150 H200" stroke-width="11"/>
+    <path d="M186 150 V176" stroke-width="11"/>
+    <path d="M174 164 Q186 182 198 164" stroke-width="11"/>
+  </g>
+  <g fill="currentColor">
+    <circle cx="104" cy="162" r="16"/>
+    <circle cx="186" cy="104" r="16"/>
+  </g>
+</svg>

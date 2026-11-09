@@ -1,0 +1,1087 @@
+/* convledger atlas — 会话流程图
+   一张只能平移缩放的流程图：主线第 1–N 步从左到右排、行末折返，插曲块单独一条道落在
+   宿主步那一行的正下方。格位是死的（行高＝近景盒高＋GAP_Y），缩放只换描述不重排。
+   连线画在卡上层（#wires 的 z 序高于 .p），只走列间/行间空带与左右走廊，端点钉在边框上。
+   颜色只有两套变量；所有文字仍然由 atlas.js 用 textContent 写入。 */
+:root {
+  --cw: 300px;
+  --ch-near: 268px;
+  --ch-mid: 248px;
+  --ch-far: 122px;
+  --ch-glyph: 96px;
+  /* 阶段标签字号：四个数与 atlas.js 的 PH_T 逐字节相等（selftest 钉）。 */
+  --pf-near: 20px;
+  --pf-mid: 24px;
+  --pf-far: 26px;
+  --pf-glyph: 32px;
+  --r: 16px;
+}
+body[data-theme="dark"] {
+  --bg: #080c12;
+  --bg2: #0b1220;
+  --card: #101823;
+  --card2: #141e2b;
+  --panel: rgba(16, 23, 33, .88);
+  --panel2: rgba(13, 19, 28, .95);
+  --line: rgba(148, 170, 200, .15);
+  --line2: rgba(160, 185, 220, .34);
+  --fg: #e7eef8;
+  --fg2: #a9b7ca;
+  --muted: #6d7d93;
+  --hover: rgba(122, 167, 255, .10);
+  --accent: #7aa7ff;
+  --bad: #ff8f7a;
+  --q: #e0b45f;
+  --ok: #5bd6b0;
+  --lv0: #7b8496;
+  --lv1: #7aa7ff;
+  --lv2: #4fd1b6;
+  --lv3: #e7c46a;
+  --code: #070b11;
+  --dot: rgba(120, 150, 190, .16);
+  --shadow: 0 1px 0 rgba(255, 255, 255, .03), 0 12px 28px rgba(0, 0, 0, .32);
+  --shadow2: 0 30px 90px rgba(0, 0, 0, .62);
+  --stage-a: #0a111c;
+  --stage-b: #070a10;
+}
+body[data-theme="light"] {
+  --bg: #eef2f7;
+  --bg2: #e6ecf4;
+  --card: #ffffff;
+  --card2: #f7f9fc;
+  --panel: rgba(255, 255, 255, .88);
+  --panel2: rgba(255, 255, 255, .97);
+  --line: rgba(22, 40, 70, .12);
+  --line2: rgba(22, 40, 70, .28);
+  --fg: #152033;
+  --fg2: #445468;
+  --muted: #7a8798;
+  --hover: rgba(40, 100, 220, .07);
+  --accent: #2f6feb;
+  --bad: #c4472f;
+  --q: #9a6a10;
+  --ok: #0b8a6e;
+  --lv0: #8d97a8;
+  --lv1: #2f6feb;
+  --lv2: #0f9e83;
+  --lv3: #a9740c;
+  --code: #f1f4f9;
+  --dot: rgba(30, 60, 110, .14);
+  --shadow: 0 1px 2px rgba(20, 35, 60, .06), 0 10px 24px rgba(20, 35, 60, .08);
+  --shadow2: 0 24px 60px rgba(20, 35, 60, .20);
+  --stage-a: #f5f8fc;
+  --stage-b: #e7edf5;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  font: 13px/1.45 -apple-system, "Segoe UI", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+}
+button { font: inherit; color: inherit; }
+[hidden] { display: none !important; }
+
+/* ---------- header ----------
+   两行网格：第一行品牌 / 视图 / 指标 / 搜索 / 操作 / 同步；第二行只放这段会话的身份。
+   分组控件共用同一圈底色与 26px 高，搜索框单独 32px；窄屏先收起指标，再收起副标题。 */
+header {
+  position: relative;
+  z-index: 100;
+  flex: none;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) minmax(220px, 420px) auto auto;
+  grid-template-areas:
+    "brand nav meters find acts live"
+    "who who who who who who";
+  align-items: center;
+  gap: 8px 12px;
+  padding: 8px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(14px);
+}
+.brand { grid-area: brand; display: flex; align-items: center; white-space: nowrap; }
+.brandline { display: flex; align-items: baseline; gap: 8px; }
+.brand b { font-size: 13px; letter-spacing: .02em; color: var(--accent); font-weight: 600; }
+.brand span { font-size: 11.5px; color: var(--muted); letter-spacing: .02em; }
+.nav, .acts {
+  display: flex; align-items: center; gap: 2px;
+  padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: var(--hover);
+}
+.nav { grid-area: nav; }
+.acts { grid-area: acts; }
+.nav > button, .acts > button {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 26px; padding: 0 10px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--fg2); font-size: 12px; cursor: pointer; white-space: nowrap;
+  transition: background .14s, color .14s;
+}
+.hicon { width: 14px; height: 14px; flex: none; display: block; }
+.nav > button:hover, .acts > button:hover { background: var(--card2); color: var(--fg); }
+.nav > button[aria-pressed="true"] { background: var(--card); color: var(--fg); box-shadow: var(--shadow); }
+.acts > button:active { transform: translateY(1px); }
+/* 补账档位：跟着操作组排，读起来像本机设置而不是第二个按钮 */
+.cadence { display: inline-flex; align-items: center; gap: 4px; padding-left: 4px; border-left: 1px solid var(--line); }
+.cadence span { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+.cadence select {
+  height: 24px; padding: 0 2px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--fg2); font: inherit; font-size: 11px; cursor: pointer;
+}
+.cadence select:hover { background: var(--card2); color: var(--fg); }
+.cadence select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+#now { color: var(--ok); }
+/* 这段画布是谁的：身份、模型、目录、会话、起止、归档——一眼分清「我在看哪段」。
+   独占第二行，和第一行的操作分开，不再和搜索框抢宽度。 */
+.who {
+  grid-area: who; min-width: 0; display: flex; align-items: baseline; gap: 6px;
+  padding-top: 6px; border-top: 1px solid var(--line);
+  white-space: nowrap; overflow: hidden; font-size: 10.5px; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.who .run { padding: 0 5px; border: 1px solid var(--line2); border-radius: 4px; color: var(--fg2); font-size: 9.5px; letter-spacing: .02em; }
+.who .cwd { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.who .mname.cur { color: var(--accent); font-weight: 600; }
+.who .mtag { margin-left: 4px; padding: 0 4px; border-radius: 4px; background: var(--accent); color: var(--bg); font-size: 8.5px; font-style: normal; letter-spacing: 0; }
+.who .sep { opacity: .35; }
+.who .arc { color: var(--ok); }
+.who .arc.none { color: var(--muted); }
+.meters { grid-area: meters; display: flex; align-items: baseline; gap: 10px; min-width: 0; overflow: hidden; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.meters .mt { white-space: nowrap; }
+.meters .mt b { margin-left: 3px; color: var(--fg2); font-weight: 600; }
+.find {
+  grid-area: find;
+  display: flex; align-items: center; gap: 6px;
+  height: 32px; padding: 0 12px;
+  background: var(--hover); border: 1px solid var(--line); border-radius: 12px;
+}
+.find:focus-within { border-color: var(--line2); background: var(--card2); }
+.find input {
+  width: 100%; min-width: 0; border: 0; outline: 0; background: transparent;
+  color: var(--fg); font: inherit; font-size: 12px;
+}
+.find input::placeholder { color: var(--muted); }
+.find input::-webkit-search-cancel-button { filter: grayscale(1); opacity: .6; }
+#findn { min-width: 30px; text-align: right; font-size: 10.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+header .live { grid-area: live; justify-self: end; display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--muted); white-space: nowrap; }
+header .live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
+header .live.ok::before { background: var(--ok); }
+header .live.bad::before { background: var(--bad); }
+@media (max-width: 1180px) {
+  header {
+    grid-template-columns: auto auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "brand nav find acts live"
+      "who who who who who";
+  }
+  .meters { display: none; }
+}
+@media (max-width: 860px) {
+  header { gap: 6px 8px; padding: 7px 10px; }
+  .brand span { display: none; }
+  header .live { font-size: 9.5px; }
+}
+
+/* ---------- 左栏：已导入的会话 ---------- */
+/* 一段会话一行；按 runner 分组；绿点＝源日志还在写（≤15 分钟），灰点＝停了。
+   拖右边缘调宽度，拖到最窄不是消失，而是收成一列状态灯（body.lib-rail）。 */
+#main { position: relative; flex: 1 1 auto; min-height: 0; display: flex; }
+#lib {
+  position: relative;
+  flex: none;
+  width: 264px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  z-index: 6;
+}
+/* 分裂条挂在 #main 上而不是 #lib 里：放进 #lib 会被 overflow:hidden 裁掉，
+   右半边的热区落在画布上，pointerdown 根本到不了它（探针实测过点不中）。 */
+#libsplit {
+  position: absolute; top: 0; bottom: 0; left: 260px; width: 8px;
+  cursor: col-resize; z-index: 7; touch-action: none;
+}
+#libsplit::after {
+  content: ""; position: absolute; top: 0; bottom: 0; left: 3px; width: 1px;
+  background: transparent; transition: background .12s;
+}
+#libsplit:hover::after, body.lib-drag #libsplit::after { background: var(--accent); }
+body.lib-drag, body.lib-drag * { cursor: col-resize !important; user-select: none; }
+.libhead {
+  flex: none; display: flex; align-items: center; gap: 8px;
+  padding: 8px; border-bottom: 1px solid var(--line);
+}
+.libfind {
+  flex: 1 1 auto; min-width: 0; display: flex; align-items: center;
+  height: 27px; padding: 0 8px;
+  background: var(--hover); border: 1px solid var(--line); border-radius: 8px;
+}
+.libfind:focus-within { border-color: var(--line2); background: var(--card2); }
+.libfind input {
+  width: 100%; border: 0; outline: 0; background: transparent;
+  color: var(--fg); font: inherit; font-size: 11.5px;
+}
+.libfind input::placeholder { color: var(--muted); }
+#libn { flex: none; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+#libbody { flex: 1 1 auto; overflow-y: auto; overscroll-behavior: contain; padding: 4px 5px 10px; }
+#libbody::-webkit-scrollbar { width: 8px; }
+#libbody::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 4px; border: 2px solid transparent; background-clip: content-box; }
+.libgroup { margin-top: 8px; }
+.libgh {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 4px 8px; font: inherit; font-size: 10px; letter-spacing: .02em; color: var(--muted);
+  background: transparent; border: 0; border-radius: 8px; cursor: grab; text-align: left;
+}
+.libgh:hover { background: var(--hover); }
+.libgh:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.libgh .grip {
+  flex: none; width: 8px; height: 12px; color: var(--muted); user-select: none;
+  background-image: radial-gradient(circle, currentColor 1px, transparent 1.3px);
+  background-size: 4px 4px; background-position: 0 1px;
+}
+.libgroup.reordering { opacity: .45; }
+.libgroup.dragover { outline: 1px dashed var(--accent); outline-offset: 2px; border-radius: 8px; }
+.libgh b { color: var(--fg2); font-size: 11px; font-weight: 600; letter-spacing: .02em; }
+.libgh .n { margin-left: auto; font-variant-numeric: tabular-nums; }
+.libgh .chev {
+  flex: none; width: 7px; height: 7px; color: var(--muted);
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg); transition: transform .14s;
+}
+.libgh[aria-expanded="true"] .chev { transform: rotate(45deg); }
+.agicon { width: 18px; height: 18px; border-radius: 4px; flex: none; display: block; object-fit: cover; }
+.agdot { width: 9px; height: 9px; border-radius: 3px; flex: none; box-shadow: 0 0 0 1px rgba(255,255,255,.12) inset; }
+.agdot.qoder { background: #7aa7ff; }
+.agdot.claude-code { background: #d97757; }
+.agdot.workbuddy { background: #4fd1b6; }
+.agdot.opencode { background: #a78bfa; }
+.libmore {
+  margin: 4px 0 8px 24px; padding: 4px 8px; border-radius: 8px;
+  border: 1px dashed var(--line); background: transparent; color: var(--muted);
+  font: inherit; font-size: 11px; cursor: pointer;
+}
+.libmore:hover { border-color: var(--line2); color: var(--fg2); }
+.librow {
+  display: flex; align-items: flex-start; gap: 8px; width: 100%;
+  padding: 6px 8px; border: 1px solid transparent; border-radius: 8px;
+  color: inherit; text-decoration: none;
+}
+.librow:hover { background: var(--hover); border-color: var(--line); }
+/* 当前段不再整行铺灰底：和别的行保持一致，靠标题后的「本页」标记认。 */
+.librow.current { background: transparent; border-color: transparent; }
+.librow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.librow .dot { flex: none; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--muted); }
+.librow.is-live .dot { background: var(--ok); }
+.librow .lt { flex: 1 1 auto; min-width: 0; }
+.librow .ltt { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--fg); }
+.librow .ltt .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.librow .chip {
+  flex: none; padding: 0 4px; border: 1px solid var(--line2); border-radius: 4px;
+  color: var(--fg2); font-size: 9px; line-height: 14px;
+}
+.librow .lws {
+  margin-top: 1px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 9.5px; color: var(--muted);
+}
+.librow .lmeta {
+  margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 9.5px; color: var(--muted); font-variant-numeric: tabular-nums;
+}
+.librow .lmeta .miss { color: var(--bad); }
+.libempty { padding: 16px 12px; color: var(--muted); font-size: 11px; line-height: 1.65; }
+.libfoot {
+  flex: none; padding: 4px 8px; border-top: 1px solid var(--line);
+  font-size: 9.5px; color: var(--muted); line-height: 1.5;
+}
+
+/* 灯条：宽度拖到阈值以下就只剩一列圆点。同一条 DOM 只换排版——分组、当前行、
+   搜索过滤状态全都不丢，点圆点一样开画布。绿点＝这段会话还在写。 */
+body.lib-rail .libhead, body.lib-rail .libfoot, body.lib-rail .libgh,
+body.lib-rail .librow .lt, body.lib-rail .libempty { display: none; }
+body.lib-rail #libbody { padding: 6px 0; overflow-x: hidden; }
+body.lib-rail .libgroup { margin-top: 0; padding: 3px 0; }
+body.lib-rail .libgroup + .libgroup { border-top: 1px solid var(--line); }
+body.lib-rail .librow {
+  justify-content: center; align-items: center; gap: 0; padding: 3px 0;
+  height: 18px; border: 0; border-radius: 0;
+}
+body.lib-rail .librow:hover { background: var(--hover); }
+body.lib-rail .librow .dot { margin: 0; width: 8px; height: 8px; }
+body.lib-rail .librow.current .dot { outline: 2px solid var(--accent); outline-offset: 2px; }
+body.lib-rail #libsplit::after { background: var(--line); }
+
+/* ---------- stage / world ---------- */
+#stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  cursor: grab;
+  touch-action: none;
+  background: radial-gradient(110% 90% at 50% 0%, var(--stage-a) 0%, var(--stage-b) 78%);
+  user-select: none;
+}
+#stage.grabbing { cursor: grabbing; }
+body[data-theme="dark"] #stage::after {
+  content: "";
+  position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(120% 100% at 50% 0%, transparent 52%, rgba(0, 0, 0, .40));
+}
+#world {
+  position: absolute; left: 0; top: 0;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+#grid {
+  position: absolute; left: -6000px; top: -6000px;
+  width: 16000px; height: 16000px;
+  background-image: radial-gradient(var(--dot) 1px, transparent 1.4px);
+  background-size: 30px 30px;
+  pointer-events: none;
+  opacity: .85;
+  transition: opacity .2s;
+}
+#world[data-tier="far"] #grid { opacity: .32; }
+#cards { position: absolute; left: 0; top: 0; width: 0; height: 0; }
+#wires {
+  position: absolute; left: 0; top: 0; width: 1px; height: 1px;
+  overflow: visible; pointer-events: none;
+  z-index: 6;
+}
+/* 三种线只有两种信息：谁连谁（走线）和这是哪一类（虚实与颜色）。
+   线宽用 --sw（applyCam 里按 1.3/z 写），箭头 marker 用 markerUnits="strokeWidth"，
+   所以缩到哪一档，线上屏幕里的粗细与箭头大小都不变。
+   流式（用户 2026-11-02 要「箭头线条动起来」）：三种线共用同一个 12 的世界虚线周期，
+   --dash / --dash-sp / --cyc 全部由 applyCam 按 1/z 写；dashoffset 在一个周期里推到负值
+   ＝缺口朝箭头方向走。周期和被推的量取自同一个 --cyc，所以缩放过程中不会和虚线错拍
+   （实测 Chromium 在 --cyc 变化时会重新代入 @keyframes 里的 var()）。
+   主线的缺口只留线宽的一点（10:2），看着仍是实线；插曲两种维持原来的 5:7 虚线观感。 */
+@keyframes wireflow { to { stroke-dashoffset: calc(var(--cyc, 12) * -1px); } }
+#wires .spine { fill: none; stroke: var(--line2); stroke-width: var(--sw, 1.3px); stroke-dasharray: var(--dash-sp, 10px 2px); opacity: .75; }
+#wires .fork { fill: none; stroke: var(--q); stroke-width: var(--sw, 1.3px); stroke-dasharray: var(--dash, 5px 7px); opacity: .95; }
+#wires .back { fill: none; stroke: var(--ok); stroke-width: var(--sw, 1.3px); stroke-dasharray: var(--dash, 5px 7px); opacity: .95; }
+/* 只推真正的连线：marker 里的箭头和岔点圆也带 spine/fork 类，把它们一起挂上动画＝每帧
+   重画两百多个箭头。所以按 data-edge 收窄，动画只挂在线身上。 */
+#wires path[data-edge] { animation: wireflow var(--flow-dur, .62s) linear infinite; }
+#wires .head.spine { fill: var(--line2); stroke: none; opacity: .9; }
+#wires .head.fork { fill: var(--q); stroke: none; }
+#wires .head.back { fill: var(--ok); stroke: none; }
+#world[data-tier="far"] #wires .spine { opacity: .95; }
+/* 阶段括号：和连线同一层，但先画（在连线下面）。线宽与虚线一样按 1/z 写，
+   缩到哪一档屏幕里的粗细一致；颜色按阶段序号内联。 */
+#wires .band { fill: none; stroke-width: var(--bs, 1.4px); opacity: .8; }
+#wires .band.on { stroke-width: calc(var(--bs, 1.4px) * 2.2); opacity: 1; }
+/* 尾段：没有阶段说明，画虚线占位；点开只给事实与补写命令。 */
+#wires .band.tailband { stroke-dasharray: 6 5; opacity: .55; }
+.phl.tail { border-style: dashed; opacity: .85; }
+.chip.pphase { border: 1px solid var(--line, #39414f); opacity: .9; }
+.chip.pphase.isTail { border-style: dashed; }
+
+/* ---------- 阶段卡（远景/中景聚合） ----------
+   远景/中景把同一阶段的块盖成一张阶段卡，近景还原成原块（PRD-blocks-live §2.3）。
+   卡面只用账本能复算的数，不替模型写说明。 */
+.pgroups { position: absolute; left: 0; top: 0; width: 0; height: 0; pointer-events: none; z-index: 3; }
+.pgroup {
+  position: absolute; pointer-events: auto;
+  border: 2px solid rgba(110, 165, 255, .5); border-radius: 16px;
+  background: var(--card2);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .22);
+  padding: 16px 20px; overflow: hidden; cursor: pointer;
+  display: flex; flex-direction: column; justify-content: center;
+}
+.pgroup.tail { border-style: dashed; border-color: rgba(140, 150, 170, .65); }
+.pgroup .pgt { font-weight: 600; font-size: 22px; line-height: 1.3; }
+.pgroup .pgs { font-size: 14px; opacity: .8; margin-top: 6px; }
+.pgroup .pgh { font-size: 12px; opacity: .55; margin-top: 8px; }
+#world[data-tier="mid"] .pgroup .pgt { font-size: 19px; }
+#world[data-tier="far"] .pgroup .pgt { font-size: 15px; }
+#world[data-tier="glyph"] .pgroup .pgt { font-size: 13px; }
+#world[data-tier="far"] .pgroup .pgs, #world[data-tier="glyph"] .pgroup .pgs,
+#world[data-tier="far"] .pgroup .pgh, #world[data-tier="glyph"] .pgroup .pgh { display: none; }
+/* 中景不做阶段聚合：阶段信息由上方括号牌负责，块保持一小块一小块。
+   阶段卡的样式保留给旧缓存/调试，但默认不显示；grouped 也不再藏块。 */
+.pgroup { display: none; }
+
+/* ---------- 阶段标签（#bands 层） ----------
+   只在主线行上方；DOM chip 用 textContent 写，点它＝右栏阶段详情。
+   带高 PH_H=56 是几何（atlas.js），这里只管牌子的样子。 */
+#bands {
+  position: absolute; left: 0; top: 0; width: 0; height: 0;
+  z-index: 7; pointer-events: none;
+}
+.phl {
+  position: absolute;
+  transform: translateX(-50%);
+  display: inline-flex; align-items: center;
+  padding: 2px 8px;
+  border: 1px solid;
+  border-radius: 8px;
+  background: var(--panel2);
+  box-shadow: var(--shadow);
+  font-size: var(--pf-near);
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  cursor: pointer;
+  pointer-events: auto;
+  user-select: none;
+}
+.phl .pfn { flex: none; font-weight: 600; }
+.phl .pft { min-width: 0; margin-left: 6px; font-weight: 500; opacity: .92; overflow: hidden; text-overflow: ellipsis; }
+.phl:hover { filter: brightness(1.12); }
+.phl.on { box-shadow: 0 0 0 2px currentColor, var(--shadow); }
+#world[data-tier="mid"] .phl { font-size: var(--pf-mid); }
+#world[data-tier="far"] .phl { font-size: var(--pf-far); padding: 0 8px; line-height: 1.1; }
+#world[data-tier="glyph"] .phl { font-size: var(--pf-glyph); padding: 0 8px; line-height: 1; }
+/* 章牌坐在阶段牌上方：同一种牌子，描边厚一道——它是"这一大块"的框，不是又一格内容。 */
+.chl { border-width: 2px; }
+/* 章笔记说的是这一章：牌上给一圈环，卡与带才对得上。用 outline 不加 border，牌宽不许跟着变。 */
+.chl.focus { outline: 2px solid currentColor; outline-offset: 2px; }
+/* 章括号比阶段括号粗一档：读者要先看见大块，再看见程。 */
+#wires .band.chapband { stroke-width: calc(var(--bs, 1.4px) * 2); opacity: .95; }
+/* 剪贴板不可用时的兜底：把接手页就地选中，让人自己复制。 */
+.chtext {
+  margin: 6px 0 0; padding: 8px; max-height: 220px; overflow: auto;
+  border: 1px solid var(--line2); border-radius: 8px;
+  background: var(--panel2); font: 12px/1.5 ui-monospace, Consolas, monospace;
+  white-space: pre-wrap; word-break: break-word; user-select: text;
+}
+
+/* ---------- part card ---------- */
+.p {
+  position: absolute;
+  width: var(--cw);
+  height: var(--ch-near);
+  background: linear-gradient(180deg, var(--card2), var(--card));
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+  cursor: pointer;
+  z-index: 2;
+  transition: border-color .16s, opacity .18s;
+}
+.p:hover { border-color: var(--line2); box-shadow: 0 14px 34px rgba(0, 0, 0, .24); }
+/* 选中＝一圈 accent 描边；卡片尺寸、位置、邻居的明暗都不动——点开一块不该让别的块"消失"。 */
+.p.on { box-shadow: 0 0 0 2px var(--accent), var(--shadow); border-color: transparent; }
+.p.dim { opacity: .16; filter: saturate(.35); }
+.p.match { box-shadow: 0 0 0 1px var(--accent), var(--shadow); }
+/* 主线/插曲/压缩点：远景以下卡上没有文字位置说"我是插曲"，改由边框线型说。
+   线型沿用连线图例（虚线＝岔出去的插曲），不是新发明一套符号。 */
+.p.rside { border-style: dashed; border-color: var(--q); }
+.p.rcomp { border-style: dotted; }
+.p.rboth { border-color: var(--lv1); }
+.p.now::after {
+  content: "";
+  position: absolute; top: 9px; right: 10px;
+  width: 7px; height: 7px; border-radius: 50%;
+  background: var(--ok);
+}
+.ptime { position: absolute; left: 0; top: 0; right: 0; height: 3px; }
+.pin {
+  height: 100%;
+  padding: 12px;
+  display: flex; flex-direction: column;
+}
+.prow { flex: none; display: flex; align-items: center; gap: 8px; height: 18px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+.p.now .prow { padding-right: 14px; }
+.pnum {
+  flex: none;
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 24px; height: 18px; padding: 0 5px; border-radius: 4px;
+  background: var(--hover); color: var(--fg2);
+  font-size: 10.5px; font-weight: 600; letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+}
+.prng { color: var(--fg2); font-size: 11px; overflow: hidden; text-overflow: ellipsis; }
+.pseg { font-variant-numeric: tabular-nums; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+.pturn { margin-left: auto; font-variant-numeric: tabular-nums; }
+.pcomp { font-size: 10px; color: var(--muted); }
+.ptitle {
+  flex: none;
+  margin-top: 8px; min-height: 36px;
+  font-size: 13.5px; line-height: 1.35; font-weight: 600; color: var(--fg);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; word-break: break-word;
+}
+.psolved {
+  flex: none;
+  margin-top: 4px;
+  font-size: 11.5px; line-height: 1.4; color: var(--fg2);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; word-break: break-word;
+}
+.pmeta {
+  flex: none;
+  margin-top: 8px; height: 40px;
+  display: flex; flex-wrap: wrap; align-content: flex-start; gap: 4px 4px;
+  overflow: hidden;
+  transition: opacity .15s;
+}
+.chip {
+  display: inline-flex; align-items: center;
+  height: 17px; padding: 0 6px; border-radius: 4px;
+  background: var(--hover); color: var(--fg2);
+  font-size: 10.5px; white-space: nowrap; font-variant-numeric: tabular-nums;
+}
+.chip.vf { color: var(--lv3); }
+.chip.orgfull { color: var(--ok); border: 1px solid var(--ok); }
+.chip.orgpart { color: var(--q); border: 1px solid var(--q); }
+.chip.vf0 { color: var(--muted); }
+.chip.bad { color: var(--bad); }
+.chip.q { color: var(--q); }
+.lvpill {
+  display: inline-flex; align-items: center;
+  height: 17px; padding: 0 6px; border-radius: 4px;
+  background: var(--hover); font-size: 10.5px; font-weight: 600; white-space: nowrap;
+}
+.lvpill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; margin-right: 4px; flex: none; }
+.lvpill.lv0 { color: var(--lv0); }
+.lvpill.lv1 { color: var(--lv1); }
+.lvpill.lv2 { color: var(--lv2); }
+.lvpill.lv3 { color: var(--lv3); }
+.claims {
+  flex: none;
+  margin-top: 8px; padding-top: 8px; height: 56px;
+  border-top: 1px solid var(--line);
+  overflow: hidden;
+  transition: opacity .15s;
+}
+.claim { display: flex; align-items: center; gap: 6px; height: 20px; font-size: 11.5px; color: var(--fg2); min-width: 0; }
+.csid { flex: none; font-size: 10px; font-weight: 600; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--lv3); }
+.ctext { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pnone { font-size: 11px; line-height: 1.55; color: var(--muted); padding-top: 2px; }
+.pfoot {
+  flex: none; margin-top: auto;
+  display: flex; align-items: center; gap: 6px;
+  height: 16px; font-size: 10.5px; color: var(--muted); white-space: nowrap;
+}
+.frange { font-variant-numeric: tabular-nums; }
+.pinfo {
+  border: 0; background: transparent; color: var(--muted);
+  font-size: 10.5px; padding: 0 2px; cursor: pointer; border-radius: 4px;
+}
+.pinfo:hover { color: var(--accent); background: var(--hover); }
+
+/* ---------- 三档＝三套描述（不是同一张卡放大缩小） ----------
+   近景全明细；中景（＝"适应"那一档）只留 第几步＋干什么＋解决了什么＋几个计数；
+   远景只剩步号与一行"这块的题"（mark＝7 格显示宽度），字在世界坐标里就大；
+   印章档（比远景更小）连那行题也收起——那个倍率下句子已经掉出屏幕可读区，
+   留一行读不动的字等于骗人，只留"第几步"这个数 + 一条完成度色带。
+   哪一档由 #world[data-tier] 决定，档位切换时盒高跟着换（atlas.js 的 relayout）。
+   字号与档位的对应（屏幕px＝世界px×z）：远景 38px 在 z=0.35 折成 13.3px，已经在 15px
+   的阅读下限以下——所以远景只敢给一行 7 格的题；再缩就交给印章档，别留半行读不动的字。
+   两边都带滞回（见 atlas.js 的 TH），临界上来回滚一寸不会逐帧换层。 */
+.tf, .tm { display: none; }
+.tn { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+#world[data-tier="mid"] .p { height: var(--ch-mid); }
+#world[data-tier="mid"] .tn, #world[data-tier="mid"] .tf { display: none; }
+#world[data-tier="mid"] .tm { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+#world[data-tier="far"] .p { height: var(--ch-far); }
+#world[data-tier="far"] .tn, #world[data-tier="far"] .tm { display: none; }
+#world[data-tier="far"] .tf { display: flex; flex-direction: column; justify-content: center; gap: 5px; flex: 1; }
+#world[data-tier="glyph"] .p { height: var(--ch-glyph); }
+#world[data-tier="glyph"] .tn, #world[data-tier="glyph"] .tm, #world[data-tier="glyph"] .fwhat { display: none; }
+#world[data-tier="glyph"] .tf { display: flex; flex-direction: column; justify-content: center; gap: 0; flex: 1; }
+#world[data-tier="glyph"] .pin { padding: 8px 10px; }
+#world[data-tier="glyph"] .fstep b { font-size: 52px; }
+#world[data-tier="glyph"] .fstep i { font-size: 18px; }
+/* 完成度在远景以下没有文字位置了，改用左边一条色带——颜色沿用中/近景 lvpill 的那四档 */
+#world[data-tier="glyph"] .p::before {
+  content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--lv0);
+}
+#world[data-tier="glyph"] .p.lv1::before { background: var(--lv1); }
+#world[data-tier="glyph"] .p.lv2::before { background: var(--lv2); }
+#world[data-tier="glyph"] .p.lv3::before { background: var(--lv3); }
+/* 盒高按档给了预算，行就不许再被 flex 压扁——压扁是静默的字迹损失，
+   宁可底部的计数条溢出被裁，也不让"干什么/解决了什么"两行自己缩掉。 */
+.tm > *, .tf > * { flex: none; min-height: 0; }
+
+/* far */
+.fstep { display: flex; align-items: baseline; gap: 6px; }
+.fstep b { font-size: 44px; line-height: 1; font-weight: 600; color: var(--fg); font-variant-numeric: tabular-nums; }
+.fstep i { font-style: normal; font-size: 17px; color: var(--muted); }
+/* 38px 是量出来的：卡内宽 300－边框－左右内边距＝274px，7 个汉字 266px 刚好放下，
+   再大一号就把 mark 的最后一个字裁掉——裁字是静默的信息损失，宁可字号让一步。 */
+.fwhat { font-size: 38px; line-height: 1.15; color: var(--fg); white-space: nowrap; overflow: hidden; }
+
+/* 中景：第几步、属于哪一块、要干什么（真人原话）、解决了什么（已证增量或产物）。 */
+/* 插曲块多一行身份：夹在第几步与第几步之间、借的是哪条支。这一行就是
+   "那两个没编号的块是什么"的答案，不再让人靠猜。 */
+.mvia { flex: none; font-size: 17px; line-height: 1.2; color: var(--q); margin-top: 3px; white-space: nowrap; overflow: hidden; }
+.mrow { flex: none; display: flex; align-items: baseline; gap: 8px; font-size: 17px; color: var(--muted); white-space: nowrap; }
+.mstep { font-size: 26px; font-weight: 600; color: var(--accent); }
+.mblk { font-variant-numeric: tabular-nums; }
+/* 中景那一行 24px：z=0.56（"适应"落点）折成 13.5 屏幕px，和普通正文一样大。
+   一行 11 格、两行 22 格，但中文标点禁则会顶掉行首一个字（atlas-probe 实测 22 格多出第三行），
+   所以 BLOCK_GIST_W 取 20＝每行留一格余量——多一个字都会被 line-clamp 静默裁掉。 */
+.mtitle { font-size: 24px; line-height: 1.25; color: var(--fg); margin-top: 3px; min-height: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+/* 出处一行：说清这 22 格是从哪一段的原话截的，回读链在卡面上就没断 */
+.msrc { flex: none; font-size: 14px; line-height: 1.2; color: var(--muted); margin-top: 3px; }
+.msolved { font-size: 19px; line-height: 1.3; color: var(--fg2); margin-top: 3px; min-height: 0; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.mmeta { flex: none; margin-top: auto; display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 16px; }
+.mmeta .chip, .mmeta .lvpill { font-size: 16px; height: 22px; }
+/* 跨块关系那一格：只写 border-style 会让 border-width 落在初值 medium（＝3px 虚线），
+   16px 的字被三条粗虚线糊住——atlas-probe 的 2× 裁图里它就是那行"重影"。给回 1px。 */
+.chip.link { color: var(--accent); background: transparent; border: 1px dashed var(--accent); }
+
+/* 标注里的标签（notes 外挂表用）：小字灰底，不抢正文 */
+.tag { font-size: 9.5px; color: var(--muted); background: var(--hover); border-radius: 4px; padding: 0 4px; white-space: nowrap; }
+.tag.bad { color: var(--bad); }
+.tag.q { color: var(--q); }
+
+/* ---------- HUD ---------- */
+#rowhint {
+  position: absolute; left: 14px; top: 12px; z-index: 70;
+  padding: 4px 8px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--line);
+  color: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums;
+  backdrop-filter: blur(10px);
+  pointer-events: none;
+  white-space: nowrap;
+}
+/* 章笔记：这一大块的总结，按屏幕像素定尺寸——缩到 12% 也读得出（世界像素排的字在那档只有 4px）。
+   内容跟着视口中心所在的那一章走；搜索清单出现时压在它上面（那张是临时物）。
+   整张卡 pointer-events:none：它坐在画布左上角，正压着第一行章牌，卡片若吃掉点击就点不动了——
+   只有末尾那一枚「打开九格」还真能点。 */
+#chapnote {
+  position: absolute; left: 14px; top: 40px; width: 330px; z-index: 71;
+  padding: 8px 12px; border-radius: 12px;
+  background: var(--panel2); border: 1px solid var(--line2);
+  border-left: 4px solid var(--accent2);
+  box-shadow: var(--shadow2); backdrop-filter: blur(12px);
+  font-size: 11.5px; line-height: 1.45; color: var(--ink);
+  pointer-events: none;
+}
+#chapnote .cnt { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: 12px; margin-bottom: 3px; }
+#chapnote .cdot { flex: none; width: 8px; height: 8px; border-radius: 50%; }
+#chapnote .crange { flex: none; font-weight: 500; color: var(--muted); font-variant-numeric: tabular-nums; }
+#chapnote .cln { display: flex; gap: 5px; min-width: 0; }
+#chapnote .cln b { flex: none; color: var(--muted); font-weight: 600; }
+#chapnote .cln span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#chapnote .cgo {
+  pointer-events: auto; display: inline-block; margin-top: 4px; padding: 2px 8px;
+  border: 1px solid var(--line2); border-radius: 8px;
+  color: var(--accent2); background: var(--panel); font: inherit; font-size: 10.5px; cursor: pointer;
+}
+#chapnote .cgo:hover { filter: brightness(1.14); }
+/* 搜索命中清单：搜到的不是一个点，而是"哪一段·第几步哪一块·主线还是插曲·那一行原文"。
+   只在有词时出现，点一行＝钻进那块并选中那段。 */
+#hits {
+  position: absolute; left: 14px; top: 40px; z-index: 72;
+  width: 392px; max-height: 52vh; overflow: auto;
+  background: var(--panel2); border: 1px solid var(--line2); border-radius: 12px;
+  box-shadow: var(--shadow2); backdrop-filter: blur(12px);
+  padding: 4px;
+}
+.hrow { display: grid; grid-template-columns: 62px 1fr; gap: 8px; padding: 8px; border-radius: 8px; cursor: pointer; align-items: start; }
+.hrow:hover { background: var(--hover); }
+.hsid { font-size: 11px; font-weight: 600; color: var(--fg2); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+.hbox { min-width: 0; }
+.htop { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.hst { font-size: 10.5px; color: var(--accent); white-space: nowrap; }
+.hrole { font-size: 10.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.htxt { font-size: 11.5px; color: var(--fg2); line-height: 1.35; margin-top: 1px; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.hnone { font-size: 11px; color: var(--muted); padding: 8px; line-height: 1.5; }
+.brandmark {
+  display: inline-block; width: 20px; height: 20px; vertical-align: -4px;
+  background: currentColor;
+  -webkit-mask: url('/icon-small.svg') center / contain no-repeat;
+  mask: url('/icon-small.svg') center / contain no-repeat;
+}
+.hlink {
+  display: inline-flex; align-items: center; gap: 5px;
+  height: 26px; padding: 0 10px; margin: 0;
+  border: 0; border-radius: 8px;
+  background: transparent; color: var(--fg2);
+  font-size: 11.5px; text-decoration: none; white-space: nowrap;
+}
+.hlink:hover { background: var(--card2); color: var(--fg); }
+.hlink[hidden] { display: none; }
+
+#legend {
+  position: absolute; left: 14px; right: 214px; bottom: 14px; z-index: 70;
+  display: flex; align-items: center; gap: 8px; flex-wrap: nowrap;
+  padding: 4px 8px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--line);
+  color: var(--muted); font-size: 10.5px;
+  white-space: nowrap; overflow: hidden;
+  backdrop-filter: blur(10px);
+}
+#legend .sw { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 4px; vertical-align: 1px; }
+#legend .sw.lv0 { background: var(--lv0); }
+#legend .sw.lv1 { background: var(--lv1); }
+#legend .sw.lv2 { background: var(--lv2); }
+#legend .sw.lv3 { background: var(--lv3); }
+#legend .sep { width: 1px; height: 12px; background: var(--line); }
+#legend .wl { display: inline-block; width: 16px; height: 0; border-top: 2px solid var(--line2); vertical-align: 3px; margin-right: 4px; }
+#legend .wl.spine { border-top-style: solid; }
+#legend .wl.fork { border-top-color: var(--q); border-top-style: dashed; }
+#legend .wl.back { border-top-color: var(--ok); border-top-style: dashed; }
+#legend .wl.band { border-top-color: var(--accent); border-top-style: solid; }
+/* 图例里章括号也粗一档，和画布上的两条带读成同一件事 */
+#legend .wl.chapband { border-top-width: 4px; border-top-color: var(--accent2); }
+#hintbar {
+  position: absolute; left: calc((100% - 212px) / 2); bottom: 108px; z-index: 70;
+  transform: translateX(-50%);
+  padding: 8px 12px; border-radius: 8px;
+  background: var(--panel); border: 1px solid var(--line);
+  color: var(--muted); font-size: 10.5px; text-align: center;
+  backdrop-filter: blur(10px);
+  max-width: min(720px, calc(100% - 250px));
+  transition: opacity .2s;
+}
+#stage.insp #hintbar { opacity: 0; pointer-events: none; visibility: hidden; }
+#hintbar button {
+  margin-left: 8px; padding: 0 5px; border: 1px solid var(--line); border-radius: 4px;
+  background: transparent; color: var(--muted); font: inherit; line-height: 1.5; cursor: pointer;
+}
+#hintbar button:hover { color: var(--fg); border-color: var(--fg); }
+#minimap {
+  position: absolute; right: 14px; bottom: 14px; z-index: 55;
+  width: 184px; height: 128px;
+  border-radius: 12px; overflow: hidden;
+  background: var(--panel); border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  cursor: crosshair;
+}
+#stage.insp #minimap { opacity: 0; visibility: hidden; pointer-events: none; }
+#minimap canvas { display: block; width: 184px; height: 128px; }
+#mmvp {
+  position: absolute; left: 0; top: 0; width: 40px; height: 30px;
+  border: 1px solid rgba(255, 255, 255, .55);
+  background: rgba(255, 255, 255, .07);
+  border-radius: 3px; pointer-events: none;
+}
+body[data-theme="light"] #mmvp { border-color: rgba(20, 40, 80, .55); background: rgba(20, 40, 80, .06); }
+
+/* ---------- inspector ---------- */
+#insp {
+  position: absolute; top: 12px; right: 12px; bottom: 12px; z-index: 90;
+  width: 344px; padding: 16px;
+  background: var(--panel2); border: 1px solid var(--line2); border-radius: 16px;
+  box-shadow: var(--shadow2);
+  backdrop-filter: blur(16px);
+  overflow: auto; overscroll-behavior: contain;
+  user-select: text;
+  scrollbar-width: thin; scrollbar-color: var(--line2) transparent;
+}
+#insp::-webkit-scrollbar { width: 9px; }
+#insp::-webkit-scrollbar-thumb { background: var(--line2); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+#inspx {
+  position: absolute; top: 9px; right: 10px; z-index: 2;
+  width: 26px; height: 26px; border-radius: 8px;
+  border: 1px solid transparent; background: transparent;
+  color: var(--muted); font-size: 16px; line-height: 1; cursor: pointer;
+}
+#inspx:hover { background: var(--hover); color: var(--fg); border-color: var(--line); }
+.ihead { display: flex; align-items: center; gap: 8px; padding-right: 26px; }
+.iid { font-size: 16px; font-weight: 600; letter-spacing: .01em; }
+.ibasis { display: inline-flex; align-items: center; height: 18px; padding: 0 6px; border-radius: 4px; background: var(--hover); font-size: 10.5px; font-weight: 600; }
+.ibasis.verified { color: var(--lv3); }
+.ibasis.reconstructed { color: var(--muted); }
+.ibasis.unknown { color: var(--muted); }
+.ikind { margin-top: 4px; font-size: 11.5px; color: var(--muted); }
+.ititle { margin-top: 2px; font-size: 12.5px; color: var(--fg2); line-height: 1.5; }
+.isrc { margin-top: 10px; font-size: 11px; line-height: 1.55; color: var(--muted); }
+.isec {
+  margin: 15px 0 5px; font-size: 10px; letter-spacing: .02em;
+  color: var(--muted);
+}
+.ifact { display: flex; gap: 10px; padding: 5px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
+.ifact:last-of-type { border-bottom: 0; }
+.ifact.wide .ik { width: 84px; }
+.ik { flex: none; width: 62px; color: var(--muted); font-size: 11.5px; padding-top: 1px; }
+.iv { flex: 1; min-width: 0; color: var(--fg2); word-break: break-word; }
+.iv .itask { color: var(--fg); font-weight: 600; }
+.ilink {
+  border: 0; background: transparent; padding: 0;
+  color: var(--accent); font: inherit; font-size: 11.5px;
+  cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px;
+}
+.ilink:hover { color: var(--fg); }
+.rchips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+.rchip {
+  display: inline-flex; align-items: center;
+  height: 18px; padding: 0 7px; border-radius: 4px;
+  background: var(--hover); color: var(--accent);
+  font-size: 10.5px; white-space: nowrap;
+}
+.irule { margin-top: 4px; font-size: 11.5px; line-height: 1.5; color: var(--fg2); }
+.irule b {
+  margin-right: 4px; color: var(--accent);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 10.5px;
+}
+.iclaim {
+  margin: 6px 0; padding: 8px 10px;
+  border-left: 2px solid var(--lv3); border-radius: 0 8px 8px 0;
+  background: var(--hover);
+  font-size: 12.5px; line-height: 1.55; color: var(--fg2);
+}
+.iclaim b { color: var(--lv3); margin-right: 6px; font-family: ui-monospace, Consolas, monospace; font-size: 10.5px; }
+.imuted { font-size: 11.5px; line-height: 1.6; color: var(--muted); padding: 4px 0; }
+.ihint { font-size: 11px; line-height: 1.55; color: var(--muted); margin-bottom: 7px; }
+.icmdrow { display: flex; gap: 6px; align-items: center; }
+.icmd {
+  flex: 1; min-width: 0; overflow: auto; white-space: nowrap;
+  padding: 6px 8px; border-radius: 8px;
+  background: var(--code); border: 1px solid var(--line);
+  color: var(--fg2); font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; font-size: 11px;
+  scrollbar-width: none;
+}
+.ibtn {
+  flex: none; height: 28px; padding: 0 10px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--hover); color: var(--fg2);
+  font-size: 11.5px; cursor: pointer; white-space: nowrap;
+}
+.ibtn:hover { border-color: var(--line2); color: var(--fg); }
+.ibtn.primary { background: var(--accent); border-color: transparent; color: #fff; font-weight: 600; }
+.ibtn.primary:hover { filter: brightness(1.08); }
+.iacts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.itip { white-space: pre-wrap; font-size: 11.5px; line-height: 1.6; color: var(--fg2); }
+
+/* ---------- 动作行 / 正文回读 / 人写层 / 写入口 ----------
+   近景卡底只有 16px 高（.pfoot），所以动作做成同高的裸按钮：段清单（推近并在右栏列段）、
+   加人写的节点、建人写的分支、事实（右栏）。正文入口在右栏，卡上不再摊开对话框。 */
+.pfoot .fbtn { height: 16px; padding: 0 4px; font-size: 10px; border-radius: 4px; }
+.pfoot .fbtn:hover, .pfoot .pinfo:hover { color: var(--accent); background: var(--hover); }
+.ibodyhost { margin-top: 8px; }
+pre.ibody {
+  margin: 0; padding: 8px 10px;
+  max-height: 320px; overflow: auto; overscroll-behavior: contain;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--code); color: var(--fg2);
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 11px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word;
+  scrollbar-width: thin; scrollbar-color: var(--line2) transparent;
+}
+.bodynote { padding: 4px 2px 0; font-size: 10.5px; line-height: 1.5; color: var(--muted); }
+.bodynote.bad { color: var(--bad); }
+
+/* 人写层（notes.json）：虚线边、灰底，和已证增量（实线 + lv3 绿）在视觉上就不许混。
+   它永远带「人写的」「未证」两个标签，也不参与任何计数。 */
+.inotes { display: flex; flex-direction: column; gap: 6px; }
+.inote {
+  padding: 8px;
+  border: 1px dashed var(--line2); border-radius: 8px;
+  background: var(--hover);
+}
+.pntop { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; }
+.pnid { font-size: 10.5px; font-weight: 600; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--fg2); }
+.pnkind { font-size: 10px; color: var(--muted); }
+.pnat { margin-left: auto; font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.pntitle { margin-top: 3px; font-size: 12px; font-weight: 600; line-height: 1.45; color: var(--fg); word-break: break-word; }
+.pnbody { margin-top: 2px; font-size: 11.5px; line-height: 1.55; color: var(--fg2); white-space: pre-wrap; word-break: break-word; }
+.tag.human { color: var(--q); }
+.chip.rule { color: var(--accent); }
+
+/* 写节点 / 建分支：一个遮罩层里三行，回车提交标题，Ctrl+回车提交说明。 */
+.dlgwrap {
+  position: fixed; inset: 0; z-index: 200;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0, 0, 0, .42); backdrop-filter: blur(3px);
+}
+.dlg {
+  width: min(420px, calc(100vw - 40px));
+  padding: 16px;
+  background: var(--panel2); border: 1px solid var(--line2); border-radius: 16px;
+  box-shadow: var(--shadow2);
+}
+.dlg h3 { margin: 0 0 3px; font-size: 14px; color: var(--fg); }
+.dlgmeta { font-size: 10.5px; line-height: 1.5; color: var(--muted); }
+.dlg .dlgt, .dlg .dlgb {
+  display: block; width: 100%; box-sizing: border-box; margin-top: 10px;
+  padding: 8px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--code); color: var(--fg);
+  font-family: inherit; font-size: 12.5px;
+}
+.dlg .dlgt:focus, .dlg .dlgb:focus { outline: none; border-color: var(--accent); }
+.dlg .dlgb { min-height: 82px; resize: vertical; line-height: 1.5; }
+.dlgerr { min-height: 15px; padding-top: 4px; font-size: 11px; line-height: 1.45; color: var(--bad); }
+.dlgact { display: flex; justify-content: flex-end; gap: 8px; }
+.toast {
+  position: fixed; left: 50%; bottom: 118px; z-index: 210;
+  transform: translateX(-50%);
+  max-width: min(560px, 80vw);
+  padding: 8px 12px; border-radius: 8px;
+  background: var(--panel2); border: 1px solid var(--line2);
+  color: var(--fg2); font-size: 11.5px; line-height: 1.5;
+  box-shadow: var(--shadow2);
+  transition: opacity .5s, transform .5s;
+}
+.toast.out { opacity: 0; transform: translate(-50%, 6px); }
+.toast.bad { border-color: var(--bad); color: var(--bad); }
+
+/* ---------- 底部续做框（PRD-parts §六 通道 A） ----------
+   页面发不到宿主聊天，所以这里只把一句话连同块号与起点写进 requests.jsonl；
+   人再去宿主里说「按地图里提的做」。位置在提示条上方，详情栏打开时整体左移让出面板。 */
+#askbar {
+  position: absolute; left: calc((100% - 212px) / 2); bottom: 52px; z-index: 71;
+  transform: translateX(-50%);
+  display: flex; align-items: center; gap: 8px;
+  width: min(620px, calc(100% - 250px));
+  padding: 8px; border-radius: 12px;
+  background: var(--panel); border: 1px solid var(--line);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow);
+}
+#stage.insp #askbar { left: calc(50% - 178px); }
+#askto {
+  flex: none; max-width: 168px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 10.5px; color: var(--accent); font-variant-numeric: tabular-nums;
+}
+#askto.none { color: var(--muted); }
+#ask {
+  flex: 1; min-width: 0; height: 27px; padding: 0 8px;
+  border: 1px solid var(--line); border-radius: 8px;
+  background: var(--code); color: var(--fg); font-size: 11.5px;
+}
+#ask:focus { outline: none; border-color: var(--accent); }
+#asksend {
+  flex: none; height: 27px; padding: 0 12px;
+  border: 1px solid transparent; border-radius: 8px;
+  background: var(--accent); color: #fff;
+  font-size: 11.5px; font-weight: 600; cursor: pointer;
+}
+#asksend:hover { filter: brightness(1.08); }
+#asksend:disabled { opacity: .55; cursor: default; }
+#asknote {
+  flex: none; max-width: 210px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 10.5px; color: var(--muted);
+}
+#asknote.ok { color: var(--ok); }
+#asknote.bad { color: var(--bad); }
+
+@media (max-width: 1180px) {
+  #hintbar { max-width: calc(100% - 250px); font-size: 10px; padding: 5px 10px; }
+  #askbar { width: min(560px, calc(100% - 250px)); }
+  #asknote { max-width: 150px; }
+}
+@media (max-width: 1280px) {
+  .meters .mt:nth-child(n+3) { display: none; }
+  .find input { width: 150px; }
+}
+@media (max-width: 980px) {
+  .meters { display: none; }
+  #legend { display: none; }
+  #insp { width: 300px; }
+  #minimap { display: none; }
+  #hintbar { display: none; }
+  #askbar { left: 50%; bottom: 14px; width: calc(100% - 28px); }
+  #askto { display: none; }
+  #asknote { max-width: 120px; }
+  .toast { bottom: 64px; }
+}
+/* 矮窗口：底部只留「续做框 + 图例 + 小地图」三层静态区，长帮助条整条收起——
+   否则三条绝对定位的横条会叠在一起（2026-10-30 用户截图）。 */
+@media (max-height: 620px) {
+  #hintbar { display: none; }
+  #askbar { bottom: 52px; }
+  .toast { bottom: 104px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .001s !important; transition-duration: .001s !important; }
+  /* 连线整层停住：两百多条线一起按 .001s 循环＝全屏闪烁，比不动更难受 */
+  #wires path[data-edge] { animation: none; }
+}
+
+/* ---------- 字体：全图固定为苹果手机那套无衬线（用户 2026-10-27 口径，当天由「正楷」更正） ----------
+   iOS 上拉丁是 SF、中文是苹方；Windows 两者都没有，按同一气质逐字回退（字体回退是按字符算的）：
+   拉丁走 Segoe UI，中文落到苹方 → Noto Sans SC（本机已装）→ 微软雅黑。
+   不把 system-ui 排在前面：中文版 Windows 上它解析成微软雅黑 UI，会带着中文字形一起截走，
+   后面的苹方/Noto 永远轮不到。段号这类原本走等宽的元素也一并归进来，保证"都固定"没有例外；
+   字重保持设计里的层级（苹方与 Noto 都有真字重，不像楷体只有常规一个字重）。 */
+:root {
+  --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", "Segoe UI",
+        "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+}
+body, body *, body *::before, body *::after { font-family: var(--ui) !important; }
+.back-project {
+  display: inline-flex; align-items: center; height: 26px; padding: 0 9px;
+  border-radius: 8px; font-size: 11.5px; color: var(--accent); text-decoration: none; white-space: nowrap;
+}
+.back-project:hover { background: var(--card2); color: var(--fg); }
+
+/* ---------- 视觉重整：左侧状态色条保留；胶囊与橙色待办框收安静 ----------
+   只换皮：正交连线、阶段括号、四档缩放与格位全部不动。
+   unslop（2026-11-09，Polish）：标签去胶囊回小圆角中性底，颜色只留在文字与圆点；
+   阶段牌回纸面标签；续做框不再扮成待办卡（橙色只留给插曲/尾段语义）；卡片去掉内高光。 */
+body[data-theme="dark"] {
+  --accent: #8b9cff;
+  --accent2: #b49cff;
+  --ok: #57d6b0;
+  --q: #f0a04b;
+  --bad: #ef6b6b;
+  --card: #151e2d;
+  --card2: #1a2435;
+  --line: rgba(160, 180, 220, .14);
+  --line2: rgba(170, 190, 230, .30);
+  --stage-a: #0b1220;
+  --stage-b: #080c12;
+  --lv0: #8b95a8; --lv1: #8b9cff; --lv2: #57d6b0; --lv3: #f0b45f;
+}
+body[data-theme="light"] {
+  --accent: #5b6ef0;
+  --accent2: #8b6cf0;
+  --ok: #14a085;
+  --q: #d98324;
+  --bad: #d2554b;
+  --card: #ffffff;
+  --card2: #f7f9fd;
+  --line: rgba(35, 55, 90, .12);
+  --line2: rgba(35, 55, 90, .26);
+  --stage-a: #f7f9fd;
+  --stage-b: #eef2f8;
+  --lv0: #8b95a8; --lv1: #5b6ef0; --lv2: #14a085; --lv3: #c58a1a;
+}
+
+/* 卡片：单中性色微渐变＋软阴影（无内高光），左侧状态色条 */
+.p {
+  background: linear-gradient(180deg, var(--card2), var(--card));
+  box-shadow: var(--shadow);
+}
+.p::before {
+  content: ""; position: absolute; left: 0; top: 14px; bottom: 14px; width: 4px;
+  border-radius: 4px; background: var(--lv1); opacity: .9; pointer-events: none;
+}
+.p.lv0::before { background: var(--lv0); }
+.p.lv1::before { background: var(--lv1); }
+.p.lv2::before { background: var(--lv2); }
+.p.lv3::before { background: var(--lv3); }
+.p.todo { border-style: dashed; border-color: rgba(240, 160, 75, .62); }
+.p.todo::before { background: var(--q); }
+.p.warn { border-color: rgba(239, 107, 107, .55); }
+.p.warn::before { background: var(--bad); }
+.p.on { box-shadow: 0 0 0 2px var(--accent), var(--shadow); }
+
+/* 标签：回到基础 .chip/.lvpill 的小圆角中性底——语义色只留在文字与圆点，不再铺彩色胶囊。 */
+
+/* 阶段牌：纸面标签＋编号；尾段用橙色虚线（待写语义，保留） */
+.phl {
+  border-color: var(--line2);
+  background: var(--panel2);
+  box-shadow: none;
+}
+.phl .pfn { color: var(--accent); }
+.phl:hover { background: var(--hover); filter: none; }
+.phl.tail {
+  background: rgba(240, 160, 75, .12); border: 1px dashed rgba(240, 160, 75, .62);
+  color: var(--q);
+}
+.phl.tail .pfn { color: var(--q); }
+
+/* 底部续做框：中性面板，不再扮成橙色待办卡；主按钮用前景色，两套主题都够对比 */
+#askbar {
+  border: 1px solid var(--line2);
+  border-radius: 12px;
+}
+#asksend { background: var(--fg); color: var(--bg); border: 0; }

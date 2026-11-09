@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="430" viewBox="0 0 1120 430" role="img" aria-label="convledger 的五层结构：会话日志派生出段、块、步、阶段、章，正文留在源文件里按锚点回读">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#101830"/><stop offset="1" stop-color="#0a0f1e"/>
+    </linearGradient>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5aa9ff"/>
+    </marker>
+    <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#f2b45a"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1120" height="430" rx="18" fill="url(#g1)"/>
+  <text x="34" y="44" fill="#e8f0ff" font-family="Segoe UI, PingFang SC, Noto Sans SC, sans-serif" font-size="20" font-weight="700">一条对话是怎么变成账本的</text>
+  <text x="34" y="68" fill="#8fa6c8" font-family="Segoe UI, PingFang SC, Noto Sans SC, sans-serif" font-size="14">正文一个字都不搬进账本 —— 账本只存结构、锚点与模型写的说明，读原文永远回到源文件。</text>
+
+  <!-- 源 -->
+  <rect x="34" y="104" width="212" height="212" rx="14" fill="#141d33" stroke="#2b3a5d"/>
+  <text x="56" y="134" fill="#dbe6f7" font-family="Segoe UI, PingFang SC, Noto Sans SC, sans-serif" font-size="15" font-weight="700">宿主会话日志</text>
+  <text x="56" y="156" fill="#8fa6c8" font-family="Segoe UI, PingFang SC, Noto Sans SC, sans-serif" font-size="13">append-only JSONL</text>
+  <g font-family="Segoe UI, PingFang SC, Noto Sans SC, sans-serif" font-size="13" fill="#a9c0e2">
+    <text x="56" y="192">Qoder</text><text x="56" y="214">Claude Code</text>
+    <text x="56" y="236">WorkBuddy</text><text x="56" y="258">OpenCode（SQLite 投影）</text>
+  </g>
+  <text x="56" y="284" fill="#4fd6a7" font-family="Segoe UI, PingFang SC, Noto Sans SC, sans-serif" font-size="12">全程只读，不改宿主</text>
+
+  <!-- 五层 -->
+  <g font-family="Segoe UI, PingFang SC, Noto Sans SC, sans-serif">
+    <rect x="300" y="104" width="500" height="34" rx="9" fill="#16233d" stroke="#5aa9ff" stroke-opacity=".55"/>
+    <text x="316" y="126" fill="#cfe2ff" font-size="14" font-weight="700">段</text>
+    <text x="360" y="126" fill="#8fa6c8" font-size="13">压缩边界切出来的区间，锚点＝源文件行区间</text>
+
+    <rect x="300" y="146" width="500" height="34" rx="9" fill="#16233d" stroke="#5aa9ff" stroke-opacity=".5"/>
+    <text x="316" y="168" fill="#cfe2ff" font-size="14" font-weight="700">块</text>
+    <text x="360" y="168" fill="#8fa6c8" font-size="13">一次真人提问管的那几段：谁写的、解决了什么</text>
+
+    <rect x="300" y="188" width="500" height="34" rx="9" fill="#16233d" stroke="#4fd6a7" stroke-opacity=".5"/>
+    <text x="316" y="210" fill="#cfe2ff" font-size="14" font-weight="700">步</text>
+    <text x="360" y="210" fill="#8fa6c8" font-size="13">只有含主线块的步才编号；插曲另起一行</text>
+
+    <rect x="300" y="230" width="500" height="34" rx="9" fill="#16233d" stroke="#f2b45a" stroke-opacity=".5"/>
+    <text x="316" y="252" fill="#cfe2ff" font-size="14" font-weight="700">阶段</text>
+    <text x="360" y="252" fill="#8fa6c8" font-size="13">模型划的连续区间＋六格说明，工具核覆盖与锚点</text>
+
+    <rect x="300" y="272" width="500" height="34" rx="9" fill="#16233d" stroke="#b98cff" stroke-opacity=".6"/>
+    <text x="316" y="294" fill="#cfe2ff" font-size="14" font-weight="700">章</text>
+    <text x="360" y="294" fill="#8fa6c8" font-size="13">九格接手页：目的／走到哪／规则／碰壁／怎么接手</text>
+  </g>
+
+  <path d="M246 210 L292 210" stroke="#5aa9ff" stroke-width="2" marker-end="url(#ar)" fill="none"/>
+
+  <!-- 回源 -->
+  <path d="M300 300 C 250 340 210 340 150 320" stroke="#f2b45a" stroke-width="2" stroke-dasharray="6 5" fill="none" marker-end="url(#ar2)"/>
+  <text x="196" y="352" fill="#f2b45a" font-family="Segoe UI, PingFang SC, Noto Sans SC, sans-serif" font-size="13">body S07 按锚点现读原文</text>
+
+  <!-- 消费侧 -->
+  <g font-family="Segoe UI, PingFang SC, Noto Sans SC, sans-serif">
+    <rect x="836" y="104" width="250" height="62" rx="12" fill="#141d33" stroke="#2b3a5d"/>
+    <text x="854" y="130" fill="#dbe6f7" font-size="14" font-weight="700">命令行</text>
+    <text x="854" y="152" fill="#8fa6c8" font-size="12.5">brief · steps · body · handoff</text>
+
+    <rect x="836" y="178" width="250" height="62" rx="12" fill="#141d33" stroke="#2b3a5d"/>
+    <text x="854" y="204" fill="#dbe6f7" font-size="14" font-weight="700">浏览器 hub</text>
+    <text x="854" y="226" fill="#8fa6c8" font-size="12.5">会话库 · 画布 · 项目页 · 架构页</text>
+
+    <rect x="836" y="252" width="250" height="62" rx="12" fill="#141d33" stroke="#2b3a5d"/>
+    <text x="854" y="278" fill="#dbe6f7" font-size="14" font-weight="700">压缩注入 hooks</text>
+    <text x="854" y="300" fill="#8fa6c8" font-size="12.5">新上下文第一跳就是这一层</text>
+  </g>
+  <path d="M800 210 L830 210" stroke="#5aa9ff" stroke-width="2" marker-end="url(#ar)" fill="none"/>
+
+  <text x="34" y="398" fill="#6f86a8" font-family="Segoe UI, PingFang SC, Noto Sans SC, sans-serif" font-size="12.5">派生数据：tool/out/ 整目录删掉可重建 · 外挂表带锚点 hash，账本一变旧说明自动失效 · 模型写的内容一律标注「归纳，不过六条判据」</text>
+</svg>

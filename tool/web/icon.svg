@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="convledger">
+  <!-- 账本 / 气泡轮廓：左边双线读作书脊，底左是对话尾巴 -->
+  <g fill="none" stroke="currentColor" stroke-width="13" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M74 54 H186 C204 54 216 66 216 84 V160 C216 178 204 190 186 190 H120 L96 212 V190 H74 C56 190 44 178 44 160 V84 C44 66 56 54 74 54 Z"/>
+    <path d="M58 84 V160" opacity=".55" stroke-width="9"/>
+    <path d="M108 160 L184 106" stroke-width="11"/>
+    <path d="M184 108 V132" stroke-width="11"/>
+    <path d="M108 160 H172" stroke-width="11"/>
+    <path d="M172 160 H196" stroke-width="9"/>
+    <path d="M184 160 V182" stroke-width="9"/>
+    <path d="M172 171 Q184 186 196 171" stroke-width="9"/>
+  </g>
+  <!-- 节点：两个实心（对话→结构），一个空心环落在锚点上方（锚点） -->
+  <g fill="currentColor">
+    <circle cx="108" cy="160" r="13"/>
+    <circle cx="184" cy="106" r="13"/>
+  </g>
+  <circle cx="184" cy="141" r="7" fill="none" stroke="currentColor" stroke-width="7"/>
+</svg>

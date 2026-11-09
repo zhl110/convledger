@@ -1,0 +1,33 @@
+D2（账本 + 锚点回补）答卷原文——2026-10-23 第二次验收跑。
+命令：show1 facts1 card7 body4 lines1 find1（原样清单见会话报告）
+
+P01 | 答案: 真实版本号 0.5.24，记在 `desktop/package.json` 第 4 行（根 package.json:4 的 0.1.0 是私有开发壳不可信；另在 原型/package.json 实测也是 0.5.24）
+    依据: S04 L118（本机归档 第 4 行引言）；S06/L263 起的 lines 原文佐证
+P02 | 答案: key 前缀 `原型乙:project:`（每个画布独立一把 key：`原型乙:project:<id>`），写在 `src/store/projects.ts` 第 20 行
+    依据: S04 L118（报告 §2「存储」行）
+P03 | 答案: `原型乙/src/lib/attachment-vault.ts`（第 5–12 行，大附件另立 vault）
+    依据: S04 L118（报告 §2「存储」行）
+P04 | 答案: `src/lib/ladder.ts` 第 46 行（`export const MOVES = ['insight','ruleout','decision','pivot','open']`；抽查窗口是 44–48 行，COMPARISON 亦引用 ladder.ts:46）
+    依据: S04 L124（sed -n '44,48p' 回显）+ S04 L175/L203
+P05 | 答案: `src/lib/background-model.ts` 第 22–25 行（提交信息注释 "On 2026-10-22 every Claude Code answer on a canvas went without a plaque"）
+    依据: S04 L118（报告第 6 行「提交日期不可用」条目）
+P06 | 答案: `src/store/index.ts` 第 38–47 行（zustand 5 slice 组合）
+    依据: S04 L118（报告 §2「前端」行）
+P07 | 答案: replay 路径会注入 memory（正常 send 路径 context-utils.ts 无 getMemory 不注入；replay 时 create-session.ts:112-115 注入，疑残留 bug，与 README/CLAUDE.md 的「memory 不进自身上下文」矛盾）。文件名：`create-session.ts`
+    依据: S03 L87/L98（原型丙 子代理返回）；S04 L163（9.0 声称 vs 源码速查表）
+P08 | 答案: 节点尺寸写死 350（而 CSS 实际 400–500；`nodeDimensions` 声明后从未赋值，导致节点重叠）
+    依据: S03 L88/L100（原型己 子代理返回「布局」条）；S04 L175（COMPARISON 素材表再次写明）
+P09 | 答案: CLI 库文件是 `cli/src/lib.ts`，1605 行
+    依据: S04 L118（报告第 5 行体量普查）；S04 L175（COMPARISON 遗留问题建议补读 cli/src/lib.ts 1605 行）
+P10 | 答案: 只实现了 explicit 一种（双父 = source HEAD 加 child_ids 反边，前端虚线渲染）；文档写了但代码里不存在的是 linear 合并策略与 `merged_branches` 元数据（材料并列还有 `strategy` 参数，全部未实现，REST 层也无 branch/merge 端点）
+    依据: S03 L96/L86（原型戊 子代理返回）；S04 L175/L203；find "linear"（L654、L687、L738）
+P11 | 答案: 被否决的是助手按「给 原型 装 原型乙 插件」路线做的那次 Bash（`npm view 原型乙 version dist-tags time` + 查 原型 插件市场缓存 plugins-cache.json），toolDenialKind=interrupted；用户原话："不是给dsh装上，我是说给你自己装上，你看看你自己能不能用？适配吗？"（此前 L275 为 "[Request interrupted by user for tool use]"）
+    依据: S06 L263-273 受阻记录 + lines 263-280 原始记录（call_15b8eb1f… 被拒；L278 用户消息）
+P12 | 答案: ①需要读源码的项目要用子代理"逆向来读"（不能只看 README 宣传，以代码为准）；②要"一个一个来读"，每个项目各生成一份对应报告
+    依据: S01 L3（用户第一条消息原文）
+P13 | 答案: 是——6 个逆向子代理是同一次并行 fan-out（起因 split-fanout:6xAgent，6 个 Agent 调用在同一批、时间戳同为 00:42:16，L83–88 一次性发出），挂在主会话的 S03 段，即第 17–24 回合（段首发起，L82 原话"6 个子代理开始并行逆向"）；其中 原型乙 那路跑到 150 轮上限未完全收尾，其余 5 份落盘 reports/*.md
+    依据: card S03（turn 17-24、Agentx6）+ body S03 L79-106
+P14 | 答案: 第一次压缩（L389，trigger=auto）前上下文总量 preTokens = 170,947 token，239 条消息被摘要取代（压缩后 7,700 token，节省 163,247）
+    依据: facts boundaries[0].preTokens / messagesSummarized
+P16 | 答案: 到第一次压缩边界（L389）为止共发生 71 次工具调用（toolCallsBefore = toolCallsInRegion = 71，覆盖前 76 回合）
+    依据: facts boundaries[0].toolCallsBefore

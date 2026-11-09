@@ -1,0 +1,33 @@
+D1（只给路由层+结构账本，禁止 body/lines/find）答卷原文——2026-10-23 第二次验收跑。
+命令：show2 card10 facts4 anchors2，全部路由层，零回补。
+
+P01 | 答案: 版本号本身账本路由层没有给出 → UNKNOWN；但"记在哪个文件的第 4 行"可定位：原型乙 的 `desktop/package.json` 第 4 行
+    依据: card S04「提到: package.json:4, desktop/package.json:4, lib/app-version.ts:3」
+P02 | 答案: UNKNOWN（key 前缀字符串不在路由层）；账本里唯一可疑的定位是 `db/db.ts:10`
+    依据: card S13「提到: engine/原型丙-engine.ts:342, db/db.ts:10, desktop/package.json:4」
+P03 | 答案: UNKNOWN
+    依据: card S09 开场被截断在 50 字符处，路径不完整；facts --all 的 attachments 只有字节数
+P04 | 答案: `types.ts` 第 315–320 行（store/types.ts 与 events/types.ts 之间无法在路由层区分）
+    依据: card S10「提到: canonical.ts:13-30, types.ts:315-320, adapters/index.ts:26-49」
+P05 | 答案: UNKNOWN（确切行区间未落账）；最接近的定位是 `adapters/claude-code-session.ts` 第 262 行附近
+    依据: card S08「提到: adapters/index.ts:7, adapters/claude-code-session.ts:7, adapters/claude-code-session.ts:262」
+P06 | 答案: 文件候选 `store/index.ts`（切片 slices/nodes.ts、slices/evaluator.ts）；行号 UNKNOWN
+    依据: card S11 看过 + card S13 看过
+P07 | 答案: `chat-devtools.ts`（支源写作 原型丙-agent-chat/chat-devtools.ts，另一相关 engine/turn-runner.ts）
+    依据: card S03 支源①；facts branches.hosts["17"]
+P08 | 答案: UNKNOWN
+    依据: card S03 支源⑥只到报告层，无布局尺寸常量与行号
+P09 | 答案: UNKNOWN；可疑候选 `lib/index.js` / `cli/package.js`
+    依据: card S13 看过、card S04 看过
+P10 | 答案: 仅能确认"上一轮笔记把 原型戊 写成『Git 式 merge』需要修正"，具体实现了哪一种 → UNKNOWN
+    依据: card S04 增量字段（截断）
+P11 | 答案: 被否决的是针对 原型乙 的 npm 查询/安装类 Bash（`npm view 原型乙 version dist-tags time …`）；用户原话（账本截断至 50 字符）：「不是给dsh装上，我是说给你自己装上，你看看你…」
+    依据: facts toolCalls.errors（line 269 rejected）+ card S06 受阻 + card S08 开场
+P12 | 答案: UNKNOWN（第一条消息在路由层被截断为「嗯，这是我昨天克隆下来的一些项目。然后，这些项」）
+    依据: card S01 开场字段截断
+P13 | 答案: 是，六个逆向子代理是同一次并行 fan-out；挂在主会话第 17 回合（段 S03，锚点 L79-108），6 次 Agent 调用
+    依据: facts fanouts {"turn":17,"line":79,"calls":[{"name":"Agent","count":6}],"segment":"S03"} + card S03 起因 split-fanout:6xAgent
+P14 | 答案: 第一次压缩前上下文总量 170,947 token，压缩后 7,700 token（省 163,247），239 条消息被摘要取代
+    依据: facts boundaries 第 1 项
+P16 | 答案: 71 次工具调用
+    依据: facts boundaries 第 1 项 toolCallsBefore:71；与 S01–S09 累加 9+7+8+20+7+2+0+18+0=71 一致

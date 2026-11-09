@@ -1,0 +1,226 @@
+[
+ {
+  "id": "D1",
+  "rows": [
+   {
+    "id": "P01",
+    "type": "text",
+    "loose": true,
+    "strict": false,
+    "saidUnknown": true
+   },
+   {
+    "id": "P02",
+    "type": "text",
+    "loose": false,
+    "strict": false,
+    "saidUnknown": true
+   },
+   {
+    "id": "P03",
+    "type": "text",
+    "loose": false,
+    "strict": false,
+    "saidUnknown": true
+   },
+   {
+    "id": "P04",
+    "type": "text",
+    "loose": false,
+    "strict": false,
+    "saidUnknown": false
+   },
+   {
+    "id": "P05",
+    "type": "text",
+    "loose": false,
+    "strict": false,
+    "saidUnknown": true
+   },
+   {
+    "id": "P06",
+    "type": "text",
+    "loose": false,
+    "strict": false,
+    "saidUnknown": true
+   },
+   {
+    "id": "P07",
+    "type": "text",
+    "loose": false,
+    "strict": false,
+    "saidUnknown": false
+   },
+   {
+    "id": "P08",
+    "type": "text",
+    "loose": false,
+    "strict": false,
+    "saidUnknown": true
+   },
+   {
+    "id": "P09",
+    "type": "text",
+    "loose": false,
+    "strict": false,
+    "saidUnknown": true
+   },
+   {
+    "id": "P10",
+    "type": "text",
+    "loose": false,
+    "strict": false,
+    "saidUnknown": true
+   },
+   {
+    "id": "P11",
+    "type": "event",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P12",
+    "type": "event",
+    "loose": false,
+    "strict": false,
+    "saidUnknown": true
+   },
+   {
+    "id": "P13",
+    "type": "structure",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P14",
+    "type": "structure",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P16",
+    "type": "structure",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   }
+  ],
+  "strict": 4,
+  "loose": 5
+ },
+ {
+  "id": "D2",
+  "rows": [
+   {
+    "id": "P01",
+    "type": "text",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P02",
+    "type": "text",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P03",
+    "type": "text",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P04",
+    "type": "text",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P05",
+    "type": "text",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P06",
+    "type": "text",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P07",
+    "type": "text",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P08",
+    "type": "text",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P09",
+    "type": "text",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P10",
+    "type": "text",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P11",
+    "type": "event",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P12",
+    "type": "event",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P13",
+    "type": "structure",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P14",
+    "type": "structure",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   },
+   {
+    "id": "P16",
+    "type": "structure",
+    "loose": true,
+    "strict": true,
+    "saidUnknown": false
+   }
+  ],
+  "strict": 15,
+  "loose": 15
+ }
+]

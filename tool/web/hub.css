@@ -1,0 +1,178 @@
+/* convledger hub — 根地址那张「会话库」。
+   一个地址服务所有会话：这里只列已建账的会话，点一行进 /s/<id>/ 的画布。
+   文字全部由 hub.js 用 textContent 写入。 */
+:root {
+  --bg: #080c12;
+  --bg2: #0b1220;
+  --card: #101823;
+  --line: rgba(148, 170, 200, .15);
+  --line2: rgba(160, 185, 220, .30);
+  --fg: #e7eef8;
+  --fg2: #a9b7ca;
+  --muted: #6d7d93;
+  --hover: rgba(122, 167, 255, .10);
+  --accent: #7aa7ff;
+  --ok: #5bd6b0;
+  --q: #e0b45f;
+  --bad: #ff8f7a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: radial-gradient(1200px 600px at 70% -10%, #12203a 0%, var(--bg) 60%), var(--bg);
+  color: var(--fg);
+  font-family: "PingFang SC", "SF Pro Text", "Segoe UI", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+  font-size: 14px;
+  display: flex;
+  flex-direction: column;
+}
+header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 22px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(11, 18, 32, .72);
+  backdrop-filter: blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+.brand { font-weight: 600; letter-spacing: .3px; white-space: nowrap; }
+.brand span { color: var(--muted); font-weight: 400; margin-left: 8px; font-size: 13px; }
+#q {
+  flex: 1;
+  max-width: 420px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--fg);
+  padding: 8px 12px;
+  font: inherit;
+  outline: none;
+}
+#q:focus { border-color: var(--line2); }
+.archlink {
+  color: var(--muted); text-decoration: none; font-size: 12.5px; white-space: nowrap;
+  padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px;
+}
+.archlink:hover { color: var(--fg2); border-color: var(--line2); }
+.archlink:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+/* 整理层筛法：与「架构与路线图」同形，按下后强调 */
+button.orgf {
+  color: var(--muted); font: inherit; font-size: 12.5px; white-space: nowrap;
+  padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; cursor: pointer;
+}
+button.orgf:hover { color: var(--fg2); border-color: var(--line2); }
+button.orgf:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+button.orgf[data-on] { color: var(--accent); border-color: var(--line2); background: var(--hover); }
+.gh .orgc { color: var(--muted); }
+.counts { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+main {
+  flex: 1;
+  overflow: auto;
+  padding: 18px 22px 40px;
+  max-width: 1040px;
+  width: 100%;
+  margin: 0 auto;
+}
+.brandmark {
+  display: inline-block; width: 20px; height: 20px; margin-right: 8px; vertical-align: -4px;
+  background: currentColor;
+  -webkit-mask: url('/icon-small.svg') center / contain no-repeat;
+  mask: url('/icon-small.svg') center / contain no-repeat;
+}
+.group { margin-bottom: 22px; }
+.gh {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0 0 8px 4px;
+  color: var(--fg2);
+  font-size: 12px;
+  letter-spacing: .4px;
+}
+.gh b { font-size: 13px; color: var(--fg); font-weight: 600; }
+.gh .live { color: var(--ok); }
+button.gh {
+  width: 100%; background: transparent; border: 0; border-radius: 8px;
+  padding: 5px 8px 5px 4px; cursor: pointer; text-align: left; margin-left: 0;
+}
+button.gh:hover { background: var(--hover, rgba(128,128,128,.08)); }
+button.gh:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.gh .grip {
+  flex: none; align-self: center; width: 8px; height: 12px; color: var(--muted); cursor: grab; user-select: none;
+  background-image: radial-gradient(circle, currentColor 1px, transparent 1.3px);
+  background-size: 4px 4px; background-position: 0 1px;
+}
+.group.reordering { opacity: .45; }
+.group.dragover { outline: 1px dashed var(--accent); outline-offset: 2px; border-radius: 8px; }
+.gh .chev {
+  flex: none; align-self: center; margin-left: auto; width: 7px; height: 7px; color: var(--muted);
+  border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg); transition: transform .14s;
+}
+.gh[aria-expanded="true"] .chev { transform: rotate(45deg); }
+.agicon { width: 18px; height: 18px; border-radius: 5px; flex: none; display: block; object-fit: cover; }
+.agdot { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.agdot.qoder { background: #7aa7ff; }
+.agdot.claude-code { background: #d97757; }
+.agdot.workbuddy { background: #4fd1b6; }
+.agdot.opencode { background: #a78bfa; }
+.more {
+  margin: 6px 0 0 18px; padding: 4px 10px; border-radius: 7px;
+  border: 1px dashed var(--line); background: transparent; color: var(--muted);
+  font: inherit; font-size: 12px; cursor: pointer;
+}
+.more:hover { border-color: var(--line2); color: var(--fg2); }
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: linear-gradient(180deg, var(--card), rgba(16, 24, 35, .72));
+  margin-bottom: 8px;
+  text-decoration: none;
+  color: inherit;
+  transition: border-color .12s ease, background .12s ease;
+}
+.row:hover { border-color: var(--line2); background: var(--hover); }
+.dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: #55627a; flex: none;
+}
+.row.live .dot { background: var(--ok); box-shadow: 0 0 0 4px rgba(91, 214, 176, .13); }
+.lt { min-width: 0; flex: 1; }
+.title {
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 14px; line-height: 1.35;
+}
+.ws { color: var(--muted); font-size: 11.5px; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meta { color: var(--muted); font-size: 12px; margin-top: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 行内色标：这段的模型层（块综述/阶段/题名/已证增量）写没写过。判据同 convledger outstanding。 */
+.org {
+  display: inline-block; margin-top: 5px; padding: 2px 8px; border-radius: 999px;
+  font-size: 11.5px; border: 1px solid var(--line); color: var(--muted);
+  max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.org.full { color: var(--ok); border-color: rgba(91, 214, 176, .42); background: rgba(91, 214, 176, .08); }
+.org.part { color: var(--q); border-color: rgba(224, 180, 95, .42); background: rgba(224, 180, 95, .08); }
+.org.none { color: var(--muted); }
+.goto { color: var(--muted); font-size: 12px; flex: none; }
+.row:hover .goto { color: var(--accent); }
+.empty { color: var(--muted); padding: 40px 4px; text-align: center; }
+footer {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 10px 22px 14px;
+  border-top: 1px solid var(--line);
+  text-align: center;
+}
+.projects { padding: 14px 22px 4px; }
+.ptitle { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+.prow { display: flex; align-items: baseline; gap: 12px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; text-decoration: none; color: inherit; }
+.prow:hover { border-color: var(--accent); }
+.prow b { font-size: 14px; }
+.pmeta { color: var(--muted); font-size: 12px; }

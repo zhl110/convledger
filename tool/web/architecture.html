@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>convledger · 架构与路线图</title>
+<link rel="icon" type="image/svg+xml" href="/icon-small.svg">
+<style>
+  :root{
+    --bg:#0e1116; --panel:#151a22; --panel2:#1b222c; --line:#2a3442;
+    --fg:#e7eef8; --fg2:#b7c2d2; --muted:#7f8b9c; --accent:#7aa7ff; --ok:#4fd1b6; --warn:#e7c46a; --bad:#e06c75;
+    --lv0:#7b8496; --lv1:#7aa7ff; --lv2:#4fd1b6; --lv3:#e7c46a;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;overflow:hidden}
+  header{display:flex;align-items:center;gap:10px;height:52px;padding:0 14px;border-bottom:1px solid var(--line);background:var(--panel)}
+  .brand{font-weight:700;letter-spacing:.2px}
+  .brandmark{display:inline-block;width:20px;height:20px;margin-right:8px;vertical-align:-4px;background:currentColor;-webkit-mask:url('/icon-small.svg') center/contain no-repeat;mask:url('/icon-small.svg') center/contain no-repeat}
+  .brand span{color:var(--muted);font-weight:500;margin-left:8px;font-size:12.5px}
+  .tabs{display:flex;gap:4px;margin-left:14px}
+  .tabs button{border:1px solid transparent;background:transparent;color:var(--fg2);padding:6px 12px;border-radius:8px;font:inherit;cursor:pointer}
+  .tabs button[aria-selected="true"]{background:var(--panel2);border-color:var(--line);color:var(--fg)}
+  .grow{flex:1}
+  .tools{display:flex;align-items:center;gap:6px}
+  .tools button,.tools a{border:1px solid var(--line);background:var(--panel2);color:var(--fg2);height:28px;min-width:30px;padding:0 9px;border-radius:7px;font:inherit;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
+  .tools button:hover,.tools a:hover{border-color:var(--accent);color:var(--fg)}
+  .search input{height:28px;padding:0 10px;border:1px solid var(--line);border-radius:7px;background:var(--panel2);color:var(--fg);font:inherit;width:220px}
+  .search input:focus{outline:none;border-color:var(--accent)}
+  main{display:grid;grid-template-columns:1fr 360px;height:calc(100vh - 52px)}
+  #stage{position:relative;overflow:hidden;cursor:grab;background:
+    radial-gradient(circle at 22% 18%, #16202e 0, transparent 42%),
+    radial-gradient(circle at 78% 82%, #131c27 0, transparent 45%), var(--bg)}
+  #stage.drag{cursor:grabbing}
+  #world{position:absolute;left:0;top:0;width:1240px;height:1080px;transform-origin:0 0}
+  #wires{position:absolute;left:0;top:0;width:1240px;height:1080px;overflow:visible;pointer-events:none}
+  #wires path{fill:none;stroke:#3a4a60;stroke-width:1.4;opacity:.65}
+  #wires path.hot{stroke:var(--accent);opacity:1;stroke-width:2}
+  .band{position:absolute;left:40px;right:40px;border:1px dashed #26313f;border-radius:14px}
+  .bandLabel{position:absolute;right:54px;text-align:right;font-size:11.5px;letter-spacing:.14em;color:var(--muted);text-transform:uppercase}
+  .node{position:absolute;width:168px;padding:10px 12px;border:1px solid var(--line);border-radius:11px;background:var(--panel);color:var(--fg);text-align:left;font:inherit;cursor:pointer;overflow:hidden;transition:border-color .15s,transform .15s,box-shadow .15s}
+  /* 卡里的命令清单是 index/body/…/summarise 这种没有空格的长串：不强制断行就会顶穿卡片边框。 */
+  .node .n,.node .s{overflow-wrap:anywhere}
+  .node:hover{border-color:#41526b;transform:translateY(-1px)}
+  .node:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+  .node .k{font-size:10.5px;color:var(--muted);letter-spacing:.08em}
+  .node .n{display:block;font-weight:650;font-size:13.5px;margin-top:1px;line-height:1.25}
+  .node .s{display:block;font-size:11px;color:var(--fg2);margin-top:3px;line-height:1.3}
+  .node[data-layer="src"]{border-color:#33506e}
+  .node[data-layer="derive"]{border-color:#3b5f57}
+  .node[data-layer="store"]{border-color:#5c4f2d}
+  .node[data-layer="table"]{border-color:#4a3f63}
+  .node[data-layer="surface"]{border-color:#2f4e63}
+  .node[data-layer="loop"]{border-color:#5e3f44}
+  .node[data-layer="dump"]{border-color:#3a434f;background:#12171f}
+  .node.sel{border-color:var(--accent);box-shadow:0 0 0 2px rgba(122,167,255,.25)}
+  .node.dim{opacity:.28}
+  .node.hot{border-color:var(--accent)}
+  .dot{display:inline-block;width:7px;height:7px;border-radius:50%;margin-right:6px;vertical-align:1px}
+  aside{border-left:1px solid var(--line);background:var(--panel);overflow:auto;padding:16px 18px}
+  aside h2{margin:0 0 2px;font-size:16px}
+  .muted{color:var(--muted)}
+  .chip{display:inline-block;font-size:11px;padding:1px 8px;border-radius:999px;border:1px solid var(--line);color:var(--fg2);margin-right:6px}
+  .sec{margin-top:16px;font-size:11px;letter-spacing:.1em;color:var(--muted);text-transform:uppercase}
+  .kv{margin-top:6px;font-size:13px;color:var(--fg2);white-space:pre-wrap}
+  code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;color:#cfd9e6}
+  .empty{color:var(--muted);margin-top:26px;line-height:1.7}
+  .roadmap{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;position:absolute;left:24px;top:24px;right:24px;width:auto}
+  .roadmap[hidden]{display:none}
+  .mile{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:12px}
+  .mile h3{margin:0;font-size:14px}
+  .mile .goal{font-size:11.5px;color:var(--muted);margin:2px 0 10px}
+  .tcard{display:block;width:100%;text-align:left;border:1px solid var(--line);border-radius:9px;background:var(--panel2);color:var(--fg);padding:8px 10px;margin-bottom:7px;font:inherit;cursor:pointer}
+  .tcard:hover{border-color:#41526b}
+  .tcard[data-status="done"]{border-left:3px solid var(--ok)}
+  .tcard[data-status="cancelled"]{border-left:3px solid var(--muted);opacity:.6}
+  .tcard b{font-size:12.5px}
+  .tcard .r{display:block;font-size:11px;color:var(--fg2);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #tip{position:absolute;pointer-events:none;background:#0b0f15;border:1px solid var(--line);border-radius:6px;padding:3px 7px;font-size:11px;color:var(--fg2);display:none;z-index:20}
+  @media (max-width: 980px){ main{grid-template-columns:1fr} aside{display:none} }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><i class="brandmark" aria-hidden="true"></i>convledger<span>架构与工作路线图</span></div>
+  <div class="tabs" role="tablist" aria-label="视图">
+    <button id="tabArch" role="tab" aria-selected="true" aria-controls="stage">架构</button>
+    <button id="tabRoad" role="tab" aria-selected="false" aria-controls="stage">工作路线图</button>
+  </div>
+  <div class="grow"></div>
+  <div class="tools">
+    <div class="search"><input id="q" type="search" placeholder="找模块 / 文件 / 命令" autocomplete="off" aria-label="搜索模块"></div>
+    <button id="zin" title="放大">＋</button>
+    <button id="zout" title="缩小">－</button>
+    <button id="fit" title="适应窗口">适应</button>
+    <a href="/" title="会话库">会话库</a>
+  </div>
+</header>
+
+<main>
+  <div id="stage">
+    <div id="world">
+      <svg id="wires" viewBox="0 0 1240 1080" aria-hidden="true">
+        <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#3a4a60"/></marker></defs>
+      </svg>
+      <section id="bands"></section>
+      <section id="nodes"></section>
+      <section id="road" class="roadmap" hidden></section>
+    </div>
+  </div>
+  <aside id="insp" aria-live="polite">
+    <div class="empty" id="inspEmpty">
+      <b>点图上的模块看职责。</b><br>
+      左侧按「输入 → 派生 → 账本 → 外挂表 → 读面 → 项目闭环」分层；<br>
+      点「工作路线图」切到 PM/PT 进度。<br><br>
+      <span class="muted">拖空白平移，滚轮缩放；搜索会缩暗无关模块。</span>
+    </div>
+    <div id="inspBody" hidden></div>
+  </aside>
+</main>
+<div id="tip"></div>
+
+<script id="roadmap" type="application/json">{"project":"","revision":0,"milestones":[],"tasks":[]}</script>
+<script>
+(function () {
+  var NODES = [
+    { id:'qoder', layer:'src', x:60, y:78, label:'Qoder JSONL', sub:'~/.qoder/projects', role:'宿主会话的 append-only 原文。工具只读它，正文永远回源到这里。', files:'<会话>.jsonl' },
+    { id:'claude', layer:'src', x:300, y:78, label:'Claude Code JSONL', sub:'~/.claude/projects', role:'第二个 runner 的会话原文，与 Qoder 走同一套派生。', files:'<会话>.jsonl' },
+    { id:'wb', layer:'src', x:540, y:78, label:'WorkBuddy 记录', sub:'~/.workbuddy', role:'第三个 runner；经规范化视图接进来，报告里如实标注它是第三个来源。', files:'workbuddy.db / JSONL' },
+    { id:'opencode', layer:'src', x:1020, y:78, label:'OpenCode SQLite', sub:'~/.local/share/opencode', role:'第四个 runner：SQLite 先投影成 append-only JSONL，再走同一套派生；Node <22.5 时跳过。', files:'opencode.db → out/opencode/' },
+    { id:'archive', layer:'src', x:780, y:78, label:'逐字归档', sub:'source.jsonl', role:'画布服务过的会话留一份逐字镜像；源被清掉后 body / anchors / 画布回落到它，并声明「读自归档」。', files:'out/store/<sid>/source.jsonl' },
+
+    { id:'adapter', layer:'derive', x:60, y:212, label:'project.mjs', sub:'适配与规范化', role:'识别 runner，把三种记录形状规整成同一份视图；不做语义判断。', files:'tool/src/project.mjs' },
+    { id:'segment', layer:'derive', x:300, y:212, label:'segment.mjs', sub:'切段规则', role:'按明写的规则把回合切成段并打标；每个决定都带规则号，零模型调用。', files:'tool/src/segment.mjs', cmd:'convledger show' },
+    { id:'build', layer:'derive', x:540, y:212, label:'build.mjs', sub:'建账', role:'把段、压缩边界、工具调用、产物压成 ledger + facts；幂等，源一变重跑即可。', files:'tool/src/build.mjs', cmd:'convledger index <会话>' },
+    { id:'facts', layer:'derive', x:780, y:212, label:'facts.mjs', sub:'结构账本', role:'回合/工具/压缩/成本的计数账本，页面上每个数都能在这里复算。', files:'tool/src/facts.mjs', cmd:'convledger facts --all' },
+
+    { id:'store', layer:'store', x:300, y:346, label:'store.mjs', sub:'账本读写 + 回源', role:'只存结构与锚点，不搬正文；body 按锚点现读，源没了对归档读并标 archived。', files:'out/store/<sid>/ledger.json', cmd:'convledger body S07' },
+    { id:'view', layer:'store', x:540, y:346, label:'view.mjs', sub:'段→块→步→阶段', role:'唯一的派生层：块按压缩边界切、水位线后按真人提问切；地图和 steps 读同一份数。', files:'tool/src/view.mjs', cmd:'convledger steps --json' },
+
+    { id:'claims', layer:'table', x:40, y:480, label:'claims.mjs', sub:'已证增量', role:'六条反编造判据全过才落盘，basis=verified；锚点一变自动失效。', files:'out/store/<sid>/claims.json', cmd:'convledger prove S07 → claim' },
+    { id:'summaries', layer:'table', x:200, y:480, label:'summaries.mjs', sub:'块综述', role:'模型写五格、工具过四道闸门；卡面标题优先用它，没有就派生并标注。', files:'out/store/<sid>/summaries.json', cmd:'convledger digest --block N → summarise --put' },
+    { id:'phases', layer:'table', x:360, y:480, label:'phases.mjs', sub:'阶段括号', role:'模型划连续步区间，工具核覆盖/锚点/引用；尾段只占位「阶段说明待写」。', files:'out/store/<sid>/phases.json', cmd:'convledger phases --put' },
+    { id:'topics', layer:'table', x:520, y:480, label:'topics.mjs', sub:'话题/任务支', role:'话题名必须逐字出现在该段已证增量里才准挂；任务支从结构派生。', files:'out/store/<sid>/topics.json', cmd:'convledger label S04 --name 把手' },
+    { id:'notes', layer:'table', x:680, y:480, label:'notes.mjs', sub:'人写标注/续做', role:'人写的标注 basis=human-note，永不参与判据；续做请求从画布底部写进账本。', files:'notes.jsonl / requests.jsonl', cmd:'convledger notes / requests' },
+    { id:'docs', layer:'table', x:840, y:480, label:'docs.mjs', sub:'文档标题清单', role:'扫 PRD/RESULT 的章节清单，阶段说明只能引用这里出现过的编号。', files:'tool/src/docs.mjs' },
+
+    { id:'cli', layer:'surface', x:20, y:616, label:'cli.mjs', sub:'命令行出口', role:'所有命令的唯一入口：index/body/progress/sync/summarise/phases/export/setup/url…；闸门不过就非零退出。', files:'tool/src/cli.mjs', cmd:'convledger --help' },
+    { id:'atlas', layer:'surface', x:190, y:616, label:'atlas（画布）', sub:'/s/<会话>/', role:'四档语义缩放、阶段括号、尾段虚线、项目页入口；每 4 秒读一次账本。', files:'tool/web/atlas.*', cmd:'convledger map' },
+    { id:'ppage', layer:'surface', x:360, y:616, label:'project-page.mjs', sub:'/p/<项目键>/', role:'项目任务页：四档、依赖箭头、任务验收与来源会话往返。', files:'tool/src/project-page.mjs', cmd:'convledger map → /p/<键>/' },
+    { id:'hooks', layer:'surface', x:530, y:616, label:'hooks/ledger-brief.mjs', sub:'宿主动作', role:'SessionStart / PreCompact / PostCompact / Stop 四个事件；只读推送，拿不到账本就不注。', files:'tool/hooks/*.mjs', cmd:'node hooks/install.mjs' },
+    { id:'brief', layer:'surface', x:700, y:616, label:'brief.mjs', sub:'第一跳', role:'压缩后的恢复入口：阶段摘要＋尾段声明＋下一跳命令；带项目任务行。', files:'tool/src/brief.mjs', cmd:'convledger brief' },
+    { id:'hub', layer:'surface', x:870, y:616, label:'map.mjs（hub）', sub:'固定 8765', role:'一个进程服务所有会话：/ 会话库、/s/ 画布、/p/ 项目页、/architecture、/projects.json；带 Host/Origin 闸。', files:'tool/src/map.mjs', cmd:'convledger map' },
+    { id:'setup', layer:'surface', x:1040, y:616, label:'setup.mjs', sub:'一键适配', role:'体检 Node/端口、找四家宿主、按需装 Skill/hooks、每源冒烟建账、写桌面与开始菜单快捷方式、起 hub。', files:'tool/src/setup.mjs', cmd:'convledger setup / url --copy' },
+
+    { id:'sync', layer:'loop', x:60, y:752, label:'sync.mjs', sub:'增量编排', role:'冻结字节区间、按预算切批、跨批关联工具调用；语义归并留给当前 agent。', files:'tool/src/sync.mjs', cmd:'convledger sync --prepare' },
+    { id:'progress', layer:'loop', x:230, y:752, label:'progress.mjs', sub:'PM/PT/EV 模型', role:'任务状态机与验收：done 必须被证据撑住，验收过期就退回待核实；计数只从这一处来。', files:'tool/src/progress.mjs', cmd:'convledger progress --project <键>' },
+    { id:'stateIO', layer:'loop', x:400, y:752, label:'state-io.mjs', sub:'原子提交', role:'锁 + tmp/fsync/rename；批次幂等（batchId + requestSha + baseRevision），冲突要重取材。', files:'out/projects/<键>/progress-state.json', cmd:'convledger sync --put' },
+    { id:'export', layer:'loop', x:570, y:752, label:'export.mjs', sub:'交接导出', role:'PROGRESS / USER-PROFILE / INDEX + 历史快照；正文完整性可核，每项目合计留 30 份。', files:'convledger-export/README', cmd:'convledger export / --check' },
+    { id:'memories', layer:'loop', x:740, y:752, label:'memories.mjs', sub:'跨会话记忆', role:'项目四类记忆＋用户画像；G0–G9 闸门、可恢复发布、晋升/撤销。', files:'out/projects/<键>/memories.json', cmd:'convledger memory --digest / --put' },
+    { id:'project', layer:'loop', x:910, y:752, label:'library/current/projects', sub:'会话·项目归组', role:'会话清单、当前会话解析、按 cwd 归项目；画布左栏与 /projects.json 都读它。', files:'tool/src/library.mjs / current.mjs / projects.mjs' },
+
+    { id:'storeFiles', layer:'dump', x:120, y:886, label:'out/store/<sid>/', sub:'派生账本', role:'ledger / calls / summaries / phases / topics / notes / source；全是派生，可重建。', files:'tool/out/store/' },
+    { id:'projState', layer:'dump', x:420, y:886, label:'进度状态', sub:'权威副本', role:'progress-state.json 是任务进度的权威；prepared/ 放批次素材，锁文件标明占用者。', files:'tool/out/projects/<键>/' },
+    { id:'exportDir', layer:'dump', x:720, y:886, label:'导出目录', sub:'交接面', role:'给人看的 PROGRESS/USER-PROFILE/INDEX 与 archive 快照；文件存在不等于新鲜，要 --check。', files:'<项目>/convledger-export/' }
+  ];
+
+  var EDGES = [
+    ['qoder','adapter'],['claude','adapter'],['wb','adapter'],['opencode','adapter'],
+    ['qoder','archive'],['opencode','archive'],
+    ['adapter','segment'],['segment','build'],['build','facts'],
+    ['build','store'],['store','view'],['facts','view'],
+    ['store','claims'],['store','summaries'],['store','phases'],['store','topics'],['store','notes'],['docs','phases'],
+    ['view','atlas'],['view','ppage'],['view','brief'],['view','cli'],
+    ['claims','view'],['summaries','view'],['phases','view'],['topics','view'],['notes','view'],
+    ['cli','sync'],['sync','progress'],['progress','stateIO'],['stateIO','projState'],
+    ['progress','export'],['progress','ppage'],['memories','export'],['memories','stateIO'],
+    ['hub','atlas'],['hub','ppage'],['hub','cli'],['hooks','brief'],
+    ['cli','setup'],['setup','hooks'],['setup','hub'],
+    ['store','storeFiles'],['export','exportDir'],['project','hub'],['project','atlas']
+  ];
+
+  var LAYERS = {
+    src:    { name:'输入 · 四种宿主的原文', y:20 },
+    derive: { name:'派生 · 零模型的规则层', y:162 },
+    store:  { name:'账本 · 只存结构与锚点', y:296 },
+    table:  { name:'外挂表 · 模型写、工具验', y:430 },
+    surface:{ name:'读面 · 命令、页面、宿主', y:566 },
+    loop:   { name:'项目闭环 · 任务、提交、导出、记忆', y:702 },
+    dump:   { name:'落盘 · 可重建的派生与权威副本', y:836 }
+  };
+  var ROLE = { done:'已完成', cancelled:'已取消', active:'进行中', blocked:'受阻', planned:'未开始', unknown:'待核实', 'awaiting-verification':'待验证' };
+
+  var stage = document.getElementById('stage');
+  var world = document.getElementById('world');
+  var wires = document.getElementById('wires');
+  var nodesEl = document.getElementById('nodes');
+  var bandsEl = document.getElementById('bands');
+  var roadEl = document.getElementById('road');
+  var inspEmpty = document.getElementById('inspEmpty');
+  var inspBody = document.getElementById('inspBody');
+  var q = document.getElementById('q');
+  var tip = document.getElementById('tip');
+  var NS = 'http://www.w3.org/2000/svg';
+  var cam = { x:0, y:0, z:1 };
+  var sel = null, mode = 'arch';
+  var ROADMAP = JSON.parse(document.getElementById('roadmap').textContent);
+
+  var byId = {};
+  NODES.forEach(function (n) { byId[n.id] = n; });
+
+  function el(tag, cls, text) { var e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+  function svg(tag, attrs) { var e = document.createElementNS(NS, tag); for (var k in attrs) e.setAttribute(k, attrs[k]); return e; }
+
+  function build() {
+    // 分层底纹与层名
+    Object.keys(LAYERS).forEach(function (k) {
+      var L = LAYERS[k];
+      var b = el('div', 'band');
+      b.style.top = (L.y - 14) + 'px';
+      b.style.height = '124px';
+      bandsEl.appendChild(b);
+      var t = el('div', 'bandLabel', L.name);
+      t.style.top = (L.y - 10) + 'px';
+      bandsEl.appendChild(t);
+    });
+
+    NODES.forEach(function (n) {
+      var b = el('button', 'node');
+      b.type = 'button';
+      b.dataset.id = n.id;
+      b.dataset.layer = n.layer;
+      b.style.left = n.x + 'px';
+      b.style.top = n.y + 'px';
+      b.appendChild(el('span', 'k', n.sub));
+      b.appendChild(el('span', 'n', n.label));
+      b.appendChild(el('span', 's', n.role.split('；')[0].replace(/。$/, '')));
+      b.addEventListener('click', function () { select(n.id); });
+      b.addEventListener('mouseenter', function (e) {
+        tip.textContent = n.label + ' · ' + n.sub;
+        tip.style.display = 'block';
+        tip.style.left = (e.clientX + 12) + 'px';
+        tip.style.top = (e.clientY + 12) + 'px';
+      });
+      b.addEventListener('mousemove', function (e) { tip.style.left = (e.clientX + 12) + 'px'; tip.style.top = (e.clientY + 12) + 'px'; });
+      b.addEventListener('mouseleave', function () { tip.style.display = 'none'; });
+      nodesEl.appendChild(b);
+      n.el = b;
+    });
+
+    EDGES.forEach(function (pair) {
+      var a = byId[pair[0]], b = byId[pair[1]];
+      if (!a || !b) return;
+      var x1 = a.x + 84, y1 = a.y + 62, x2 = b.x + 84, y2 = b.y;
+      var dy = Math.max(24, Math.abs(y2 - y1) / 2);
+      var p = svg('path', {
+        d: 'M' + x1 + ' ' + y1 + ' C' + x1 + ' ' + (y1 + dy) + ' ' + x2 + ' ' + (y2 - dy) + ' ' + x2 + ' ' + y2,
+        'marker-end': 'url(#ah)'
+      });
+      p.dataset.from = pair[0]; p.dataset.to = pair[1];
+      wires.appendChild(p);
+    });
+
+    buildRoad();
+    fit();
+  }
+
+  function buildRoad() {
+    var data = ROADMAP;
+    roadEl.textContent = '';
+    data.milestones.forEach(function (m) {
+      var col = el('div', 'mile');
+      col.appendChild(el('h3', '', m.id + ' · ' + m.short));
+      col.appendChild(el('div', 'goal', m.goal || m.title));
+      data.tasks.filter(function (t) { return t.pm === m.id; }).forEach(function (t) {
+        var c = el('button', 'tcard');
+        c.type = 'button';
+        c.dataset.status = t.status;
+        c.appendChild(el('b', '', t.id + ' ' + t.short));
+        var r = el('span', 'r', (ROLE[t.status] || t.status) + ' · ' + (t.result || t.title));
+        r.title = t.result || t.title;   // 这一行是省略号截断的，悬停要能看到整句
+        c.appendChild(r);
+        c.addEventListener('click', function () { selectTask(t); });
+        col.appendChild(c);
+      });
+      roadEl.appendChild(col);
+    });
+  }
+
+  function focusSet(id) {
+    var keep = {}; keep[id] = 1;
+    EDGES.forEach(function (p) { if (p[0] === id) keep[p[1]] = 1; if (p[1] === id) keep[p[0]] = 1; });
+    NODES.forEach(function (n) { n.el.classList.toggle('dim', !keep[n.id]); n.el.classList.toggle('hot', !!keep[n.id] && n.id !== id); });
+    Array.prototype.forEach.call(wires.querySelectorAll('path'), function (p) {
+      p.classList.toggle('hot', p.dataset.from === id || p.dataset.to === id);
+    });
+  }
+
+  function clearFocus() {
+    NODES.forEach(function (n) { n.el.classList.remove('dim', 'hot', 'sel'); });
+    Array.prototype.forEach.call(wires.querySelectorAll('path'), function (p) { p.classList.remove('hot'); });
+  }
+
+  function select(id) {
+    var n = byId[id]; if (!n) return;
+    sel = id;
+    clearFocus();
+    n.el.classList.add('sel');
+    focusSet(id);
+    inspEmpty.hidden = true; inspBody.hidden = false;
+    inspBody.textContent = '';
+    var h = el('h2', '', n.label);
+    inspBody.appendChild(h);
+    var chips = el('div');
+    chips.appendChild(el('span', 'chip', LAYERS[n.layer].name.split(' · ')[0]));
+    chips.appendChild(el('span', 'chip', n.sub));
+    inspBody.appendChild(chips);
+    inspBody.appendChild(el('div', 'sec', '它负责什么'));
+    inspBody.appendChild(el('div', 'kv', n.role));
+    inspBody.appendChild(el('div', 'sec', '关键文件'));
+    var f = el('div', 'kv'); f.appendChild(el('code', '', n.files)); inspBody.appendChild(f);
+    if (n.cmd) { inspBody.appendChild(el('div', 'sec', '怎么用')); var c = el('div', 'kv'); c.appendChild(el('code', '', n.cmd)); inspBody.appendChild(c); }
+    var outs = EDGES.filter(function (p) { return p[0] === id; }).map(function (p) { return byId[p[1]] ? byId[p[1]].label : p[1]; });
+    var ins = EDGES.filter(function (p) { return p[1] === id; }).map(function (p) { return byId[p[0]] ? byId[p[0]].label : p[0]; });
+    if (ins.length) { inspBody.appendChild(el('div', 'sec', '上游')); inspBody.appendChild(el('div', 'kv', ins.join('、'))); }
+    if (outs.length) { inspBody.appendChild(el('div', 'sec', '去向')); inspBody.appendChild(el('div', 'kv', outs.join('、'))); }
+  }
+
+  function selectTask(t) {
+    clearFocus();
+    inspEmpty.hidden = true; inspBody.hidden = false;
+    inspBody.textContent = '';
+    inspBody.appendChild(el('h2', '', t.id + ' ' + t.short));
+    var chips = el('div');
+    chips.appendChild(el('span', 'chip', ROLE[t.status] || t.status));
+    chips.appendChild(el('span', 'chip', t.pm));
+    inspBody.appendChild(chips);
+    inspBody.appendChild(el('div', 'sec', '任务'));
+    inspBody.appendChild(el('div', 'kv', t.title));
+    if (t.result) { inspBody.appendChild(el('div', 'sec', '结果')); inspBody.appendChild(el('div', 'kv', t.result)); }
+    if (t.remaining) { inspBody.appendChild(el('div', 'sec', '还欠')); inspBody.appendChild(el('div', 'kv', t.remaining)); }
+    if (t.accept && t.accept.length) {
+      inspBody.appendChild(el('div', 'sec', '验收'));
+      inspBody.appendChild(el('div', 'kv', t.accept.map(function (a, i) { return (i + 1) + '. ' + a; }).join('\n')));
+    }
+  }
+
+  function clearInsp() {
+    sel = null; clearFocus();
+    inspBody.hidden = true; inspEmpty.hidden = false;
+  }
+
+  // 缩放与平移
+  function applyCam() {
+    world.style.transform = 'translate(' + cam.x + 'px,' + cam.y + 'px) scale(' + cam.z + ')';
+    wires.style.strokeWidth = (1.2 / cam.z).toFixed(2);
+  }
+  function zoomAt(sx, sy, nz) {
+    nz = Math.max(0.45, Math.min(1.8, nz));
+    var wx = (sx - cam.x) / cam.z, wy = (sy - cam.y) / cam.z;
+    cam.z = nz; cam.x = sx - wx * nz; cam.y = sy - wy * nz;
+    applyCam();
+  }
+  function fit() {
+    var w = stage.clientWidth, h = stage.clientHeight;
+    var z = Math.min(w / 1150, h / 1000, 1);
+    cam.z = z; cam.x = (w - 1240 * z) / 2; cam.y = (h - 1080 * z) / 2;
+    applyCam();
+  }
+  stage.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    if (mode !== 'arch') return;
+    var r = stage.getBoundingClientRect();
+    zoomAt(e.clientX - r.left, e.clientY - r.top, cam.z * Math.exp(-e.deltaY * 0.0015));
+  }, { passive: false });
+  var drag = null;
+  stage.addEventListener('pointerdown', function (e) {
+    if (e.target.closest('.node, .tcard, aside')) return;
+    drag = { x: e.clientX, y: e.clientY, cx: cam.x, cy: cam.y };
+    stage.classList.add('drag'); stage.setPointerCapture(e.pointerId);
+  });
+  stage.addEventListener('pointermove', function (e) {
+    if (!drag) return;
+    cam.x = drag.cx + (e.clientX - drag.x); cam.y = drag.cy + (e.clientY - drag.y);
+    applyCam();
+  });
+  stage.addEventListener('pointerup', function () { drag = null; stage.classList.remove('drag'); });
+  document.getElementById('zin').addEventListener('click', function () { zoomAt(stage.clientWidth / 2, stage.clientHeight / 2, cam.z * 1.2); });
+  document.getElementById('zout').addEventListener('click', function () { zoomAt(stage.clientWidth / 2, stage.clientHeight / 2, cam.z / 1.2); });
+  document.getElementById('fit').addEventListener('click', fit);
+  window.addEventListener('resize', function () { if (mode === 'arch') fit(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') clearInsp(); });
+  document.addEventListener('mousemove', function (e) { if (tip.style.display === 'block' && e.target.closest('.node')) { tip.style.left = (e.clientX + 12) + 'px'; tip.style.top = (e.clientY + 12) + 'px'; } });
+
+  // 搜索
+  q.addEventListener('input', function () {
+    var t = q.value.trim().toLowerCase();
+    if (!t) { clearFocus(); if (sel) select(sel); return; }
+    NODES.forEach(function (n) {
+      var hit = (n.label + ' ' + n.sub + ' ' + n.files + ' ' + (n.cmd || '') + ' ' + n.role).toLowerCase().indexOf(t) >= 0;
+      n.el.classList.toggle('dim', !hit);
+      n.el.classList.toggle('hot', hit);
+    });
+  });
+
+  // 视图切换
+  var tabArch = document.getElementById('tabArch'), tabRoad = document.getElementById('tabRoad');
+  function setMode(m) {
+    mode = m;
+    var arch = m === 'arch';
+    tabArch.setAttribute('aria-selected', String(arch));
+    tabRoad.setAttribute('aria-selected', String(!arch));
+    ['bands', 'nodes', 'wires'].forEach(function (id) { document.getElementById(id).style.display = arch ? '' : 'none'; });
+    roadEl.hidden = arch;
+    if (arch) { world.style.transform = ''; world.style.width = '1240px'; world.style.height = '1080px'; fit(); }
+    else {
+      world.style.transform = 'none'; world.style.width = stage.clientWidth + 'px'; world.style.height = stage.clientHeight + 'px';
+      roadEl.style.width = (stage.clientWidth - 48) + 'px';
+      buildRoad();
+    }
+    clearInsp();
+  }
+  tabArch.addEventListener('click', function () { setMode('arch'); });
+  tabRoad.addEventListener('click', function () { setMode('road'); });
+
+  build();
+  // 路线图不再吃 HTML 里的快照：进页面时向 hub 要当前项目状态，回来就重画一次。
+  fetch('/architecture.json', { cache: 'no-store' }).then(function (r) { return r.ok ? r.json() : null; }).then(function (next) {
+    if (!next || !Array.isArray(next.tasks)) return;
+    ROADMAP = next;
+    if (mode === 'road') buildRoad();
+  }).catch(function () { /* 拿不到就继续用内嵌快照 */ });
+})();
+</script>
+</body>
+</html>

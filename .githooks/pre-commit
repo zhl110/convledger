@@ -1,0 +1,3 @@
+#!/bin/sh
+# 提交前只扫暂存区：发现疑似密钥就挡住这次提交。
+exec node "$(dirname "$0")/../tool/scan-secrets.mjs" --staged
