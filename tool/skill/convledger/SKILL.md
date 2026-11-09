@@ -1,6 +1,6 @@
 ---
 name: convledger
-description: 用 convledger 账本回答「之前做到哪了 / 上次那个是怎么做的」并维护会话地图：一个 hub 服务所有会话（固定 8765、画布按 /s/<ID>/ 寻址、两个 agent 可同时用）、压缩后第一跳 brief、块表 steps、按锚点回源读原文 body、已证增量 claim、块综述与阶段括号（summarise/phases --put）、跨会话记忆（memory 读取/--digest/--put/--promote/--unpromote，项目表＋用户画像）、项目任务页（/p/<键>/ 四档＋依赖箭头）与收尾同步（progress、sync --prepare/--put）。绝对入口 node {{TOOL_ROOT}}/tool/bin/convledger.mjs。当用户问及本会话或本项目的进度、历史决策、某一步做了什么，要写或改块综述、任务题名、阶段说明、项目记忆/用户画像，或要看会话地图/路线图（atlas）时使用；触发词：convledger、账本、brief、锚点回读、块综述、阶段括号、项目记忆、用户画像、晋升、memory、导出、项目进度、任务进度、收尾检查、sync、项目任务页、会话地图、路线图、atlas。
+description: 用 convledger 账本回答「之前做到哪了 / 上次那个是怎么做的」并维护会话地图：一个 hub 服务所有会话（固定 8765、画布按 /s/<ID>/ 寻址、两个 agent 可同时用）、压缩后第一跳 brief、块表 steps、按锚点回源读原文 body、已证增量 claim、块综述与阶段括号（summarise/phases --put）、章层与接手页（chapters --put、handoff）、跨会话记忆（memory 读取/--digest/--put/--promote/--unpromote，项目表＋用户画像）、项目任务页（/p/<键>/ 四档＋依赖箭头）与收尾同步（progress、sync --prepare/--put）。绝对入口 node {{TOOL_ROOT}}/tool/bin/convledger.mjs。当用户问及本会话或本项目的进度、历史决策、某一步做了什么，要写或改块综述、任务题名、阶段说明、章、项目记忆/用户画像，或要看会话地图/路线图（atlas）、补账档位、经验画像、架构页时使用；触发词：convledger、账本、brief、锚点回读、块综述、阶段括号、handoff、接手页、章、项目记忆、用户画像、晋升、memory、导出、项目进度、任务进度、收尾检查、补账、sync、项目任务页、会话地图、路线图、atlas、架构页、经验画像。
 ---
 
 # convledger 会话账本
@@ -16,12 +16,15 @@ description: 用 convledger 账本回答「之前做到哪了 / 上次那个是�
 
   下文把这一长串简写为 `convledger <命令>`，展开就是上面这行。
 - 账本目录：`{{TOOL_ROOT}}/tool/out/store/<会话ID>/`，全是派生数据，可随时重建。
-- 页面：`http://127.0.0.1:8765/`（一个 hub 服务所有会话：`/` 是会话库，每段会话的画布在 `/s/<ID>/`；**项目任务页在 `/p/<项目键>/`**，四档缩放、依赖箭头、任务↔原文往返；页面顶部「会话实时」读最近一段账本，显示第几步、哪一块、还有多少字节没收尾，每 5 秒更新，不等 `sync --put`）。**会话库标题优先读桌面端工作区里的会话名**（Qoder 的 `chat_sessions.title`，只读库，不写宿主），读不到才回落到账本派生的任务/块/阶段标题；**左栏 agent 分组可拖动排序（或 Alt+↑↓），顺序存在本机，会话库与画布共用**。**每一行都标这段整理过没有**：绿「已整理 · 综述 234/236 · 阶段 29 · 题名 196/196」/ 黄「欠 N 项 · …」/ 灰「未整理 · 只有结构账」，判据与 `convledger outstanding` 同一条（锚点失效的旧综述不算）；顶栏「全部」按钮循环切「只看未整理 / 只看整理过」，总数行给「整理过 N / 总数」，画布左栏同一条会话上也有这个小标。**项目页顶部两块实时内容随账本刷新**：「经验 · 按阶段」（块综述 lesson 按会话＋阶段收拢，点会话号回画布）与「用户画像 · 做事方式」（用户表＋项目表条目，0 条如实写）；画布阶段六格下也有「这一程的经验」。`convledger export` 把经验写进 `PROGRESS.md`，并生成 `convledger-export/sessions/<会话>-notes.md` 会话笔记。**项目页每 5 秒按 revision 自动刷新**（档位与选中保留），新任务不用手动刷。**架构页在会话库顶栏（`/architecture`）**：整个工具的模块架构图＋PM/PT 工作路线图（可点、可搜、可缩放；路线图进页面时实时读项目状态，不再是快照），不属于任何一段会话，别挂到画布顶栏。**会话画布顶栏的「▤ 项目页」直接跳项目任务页**（按会话 cwd 算项目键）；项目页顶栏随之出现「← 返回会话」，回到刚才那段对话的画布并保留档位与选中；从项目页点任务里的来源会话进画布时，画布也会显示「← 返回项目」。
-- 这个文件不存在 = 本机没装这套工具。先确认仓库还在 `{{TOOL_ROOT}}`；新设备直接跑 `node {{TOOL_ROOT}}/tool/bin/convledger.mjs setup --no-open`（体检、找宿主、装 Skill/hooks、**按写入时间建最近 20 个会话的账**、快捷方式、起 hub 一次做完，结尾四行「下一步」说明还缺什么；`--build N`/`--all` 改建账范围，`--check` 只看计划，`--uninstall` 只撤自己写的条目；`--open` 会开系统浏览器，在 Agent 内不要加），再用内置浏览器打开 `/`。
+- 页面：`http://127.0.0.1:8765/`（一个 hub 服务所有会话：`/` 是会话库，每段会话的画布在 `/s/<ID>/`；**项目任务页在 `/p/<项目键>/`**，四档缩放、依赖箭头、任务↔原文往返）。页面顶部「会话实时」读最近一段账本，显示第几步、哪一块、还有多少字节没收尾，每 5 秒更新，不等 `sync --put`。
+- 会话库：标题优先读桌面端工作区里的会话名（Qoder 的 `chat_sessions.title`，只读库，不写宿主），读不到才回落到账本派生的任务/块/阶段标题；左栏 agent 分组可拖动排序（或 Alt+↑↓），顺序存在本机，会话库与画布共用。每一行都标整理过没有：绿「已整理 · 综述 234/236 · 阶段 29 · 题名 196/196」/ 黄「欠 N 项 · …」/ 灰「未整理 · 只有结构账」，判据与 `convledger outstanding` 同一条（锚点失效的旧综述不算）；顶栏「全部」按钮循环切「只看未整理 / 只看整理过」，总数行给「整理过 N / 总数」，画布左栏同一条会话上也有这个小标。
+- 项目页与导出：顶部两块实时内容随账本刷新——「经验 · 按阶段」（块综述 lesson 按会话＋阶段收拢，点会话号回画布）与「用户画像 · 做事方式」（用户表＋项目表条目，0 条如实写）；画布阶段六格下也有「这一程的经验」。`convledger export` 把经验写进 `PROGRESS.md`，并生成 `convledger-export/sessions/<会话>-notes.md` 会话笔记。项目页每 5 秒按 revision 自动刷新（档位与选中保留），新任务不用手动刷。
+- 架构页与页面往返：架构页在会话库顶栏（`/architecture`），画整个工具的模块架构图＋PM/PT 工作路线图（可点、可搜、可缩放；路线图进页面时实时读项目状态，不再是快照），不属于任何一段会话，别挂到画布顶栏。会话画布顶栏的「▤ 项目页」直接跳项目任务页（按会话 cwd 算项目键）；项目页顶栏随之出现「← 返回会话」，回到刚才那段对话的画布并保留档位与选中；从项目页点任务里的来源会话进画布时，画布也会显示「← 返回项目」。
+- 这个文件不存在 = 本机没装这套工具。先确认仓库还在 `{{TOOL_ROOT}}`；新设备直接跑 `node {{TOOL_ROOT}}/tool/bin/convledger.mjs setup --no-open`（体检、找宿主、装 Skill/hooks、**按写入时间建最近 20 个会话的账**、桌面入口、起 hub 一次做完，结尾四行「下一步」说明还缺什么；`--build N`/`--all` 改建账范围，`--check` 只看计划，`--uninstall` 只撤自己写的条目；`--open` 会开系统浏览器，在 Agent 内不要加），再用内置浏览器打开 `/`。桌面入口：Windows 写快捷方式，Linux 写 `.desktop` 应用菜单项；macOS 尚未在真机实测。
 
 ## 它是什么
 
-从四种宿主（Qoder `~/.qoder/projects`、Claude Code `~/.claude/projects`、WorkBuddy `~/.workbuddy/projects`、OpenCode `~/.local/share/opencode/opencode.db`——最后一种先投影成 `out/opencode/<会话>/<会话>.jsonl` 再走同一条管线）的 append-only JSONL 里派生出「段 → 块 → 步 → 阶段」四层结构和锚点。正文一个字都不搬进账本——除了画布服务过的会话会留一份逐字归档（见下节）。
+从四种宿主（Qoder `~/.qoder/projects`、Claude Code `~/.claude/projects`、WorkBuddy `~/.workbuddy/projects`、OpenCode `~/.local/share/opencode/opencode.db`——最后一种先投影成 `out/opencode/<会话>/<会话>.jsonl` 再走同一条管线）的 append-only JSONL 里派生出「段 → 块 → 步 → 阶段 → 章」五层结构和锚点（OpenCode 来源要 Node ≥22.5，低于它只是那一家跳过）。正文一个字都不搬进账本——除了画布服务过的会话会留一份逐字归档（见下节）。
 
 同一个 store 收所有会话，`--session <前缀>` 不分宿主；`ledger.json` 的 `runner` 字段写明来源。store 里只有一个账本时可省略 `--session`，否则先 `convledger sessions`。
 
@@ -55,7 +58,7 @@ description: 用 convledger 账本回答「之前做到哪了 / 上次那个是�
 
 3. 用户要看页面时，用 **Qoder 桌面端的内置浏览器**打开（`browser-use` 的 `navigate_page`），**不要**用系统浏览器 `cmd start`——内置面板只有 agent 在对话里能唤醒，脚本唤不起。面板已开着同一地址就刷新，别另开。agent 自己跑 `map`/`setup` 时**不要加 `--open`**（那只开系统浏览器）；拿到打印的地址后由你用内置浏览器打开。
 4. 用户不需要记网址：`/` 是会话库，本会话画布地址由 `map` 横幅给出。**页面关掉不会停 hub**——回来时双击桌面或开始菜单「convledger 地图」，或跑 `convledger url --copy`（确保 hub 在跑并把地址放进剪贴板）。**地址常驻**：开始菜单搜 convledger 就有入口，用户问地址优先给 `http://127.0.0.1:8765/`。
-5. 页面每 4 秒重读账本；点块＝选中＋推近＋右栏，点阶段括号牌＝六格说明，**点章括号牌＝九格接手页**（主线行上方现在是两条带：上面章、下面阶段；章牌写 `章 N · 第 a–b 步 · 章名`，面板里就是 `convledger handoff` 那几格，另有「定位到第 N 步」与「复制 handoff」——接手页文本只有一份，由 hub 的 `/handoff` 出），**左上角还常驻一张「章笔记」**：视口正中那一张块属于哪一章，卡就写那一章的目的／走到哪／怎么接手（按屏幕像素排，12% 的「适应」档也读得出；章牌里的字是世界像素，那一档只剩 4px），末尾一枚「打开九格」进同一份接手页，没写章或搜索清单出现时这张卡让位，搜索框找块与段，底部续做框写请求。**块间连线是流式的**：缺口沿行进方向朝箭头走（灰＝主线，橙虚线＝宿主步岔出插曲，绿虚线＝汇回主干），只改画法，不改线的走法、端点与箭头；系统开了「减少动态」就整层停住。**中景档把同一阶段的块聚合成一张阶段卡**（点开进阶段六格），近景还原原块；已写阶段之后的新内容在「尾段」（虚线占位带）里按真人提问一条一块，尾段说明待写时如实标出。右栏近景写「我的要求 / 经验 / 做成什么」，原话只在原文入口，不再复读「你说的/我回的」；任务行会写「这一步在做…」，主线任务没有模型题名时显示未命名，不拿原话顶替。右下角「已同步 · 时间 · 落后 N 秒」里的 N 是源最后写入与账本构建之差，**0 才代表画到了最新**；块综述/阶段/任务题名是模型写的，不随重建自动变。
+5. 页面每 4 秒重读账本；点块＝选中＋推近＋右栏，点阶段括号牌＝六格说明，**点章括号牌＝九格接手页**（主线行上方现在是两条带：上面章、下面阶段；章牌写 `章 N · 第 a–b 步 · 章名`，面板里就是 `convledger handoff` 那几格，另有「定位到第 N 步」与「复制 handoff」——接手页文本只有一份，由 hub 的 `/handoff` 出），**左上角还常驻一张「章笔记」**：视口正中那一张块属于哪一章，卡就写那一章的目的／走到哪／怎么接手（按屏幕像素排，12% 的「适应」档也读得出；章牌里的字是世界像素，那一档只剩 4px），末尾一枚「打开九格」进同一份接手页，没写章或搜索清单出现时这张卡让位，搜索框找块与段，底部续做框写请求。**块间连线是流式的**：缺口沿行进方向朝箭头走（灰＝主线，橙虚线＝宿主步岔出插曲，绿虚线＝汇回主干），只改画法，不改线的走法、端点与箭头；系统开了「减少动态」就整层停住。**中景保持原块**（阶段信息由上方括号牌承担），近景是全明细；已写阶段之后的新内容在「尾段」（虚线占位带）里按真人提问一条一块，尾段说明待写时如实标出。右栏近景写「我的要求 / 经验 / 做成什么」，原话只在原文入口，不再复读「你说的/我回的」；任务行会写「这一步在做…」，主线任务没有模型题名时显示未命名，不拿原话顶替。右下角「已同步 · 落后 N 秒」里的 N（构建时间在悬停提示里）是源最后写入与账本构建之差，**0 才代表画到了最新**；块综述/阶段/任务题名是模型写的，不随重建自动变。
 
 ## 工作流 1：建账与更新
 
@@ -89,6 +92,7 @@ description: 用 convledger 账本回答「之前做到哪了 / 上次那个是�
 - 块综述：`convledger digest --block N` 拿素材（缺哪些：`convledger summarise --missing`）→ 按素材写成 JSON（五格必填；`need` / `lesson` 选填，右栏会显示成「我的要求 / 经验」）→ `convledger summarise --put -`。四道闸门全过才落盘并重建。
 - 阶段说明：`convledger digest --phases` 拿全量步表＋文档标题清单 → 划连续步区间、写六格 → `convledger phases --put -`。边界/覆盖/锚点/引用全过才落盘。
 - 章（会话太长时的接手页）：`convledger chapters --digest` 拿素材 → 写九格（一开始的目的 / 走到哪 / 核心规则与原则 / 主要任务 / 碰过的壁 / 注意事项 / 架构现状 / 怎么接手 / 章名）→ `convledger chapters --put -`。**章的边界必须落在阶段边界上**（`from`＝某阶段的 `from`、`to`＝某阶段的 `to`）、每章 ≥3 段阶段、从第 1 步起首尾相接；没成章的尾部如实留着，别硬凑。写完 `brief` 自动换成章模式，长会话的注入才不会超预算被截断。
+- 只写已收口的步：当前步还在长，先别写它的块综述与阶段（写完立刻失效）。补阶段用 `{"append":true}`：只校验新区间，过期的尾段会被丢掉再接上。写章前阶段必须新鲜、成章后再别回头改；顺序固定为块综述 → 阶段 → 章。
 - 认识增量：`convledger prove S07` → `convledger claim`（单条参数）或 `convledger claim --json -`（stdin 批量）。六条判据全过才是 verified。
 - 话题与任务支：`convledger topics` 看已成支/暂挂的话题与覆盖段；`convledger label S04 T1`（或 `convledger label S04 --name 把手`）给段挂话题——话题名必须逐字出现在该段已证增量里，否则拒挂。`convledger branches [--state 已复核]` 看任务支。
 - 人写标注：`convledger notes`；地图底部续做请求：`convledger requests [--pending] [--done R01]`。
@@ -97,7 +101,7 @@ description: 用 convledger 账本回答「之前做到哪了 / 上次那个是�
 - 用户画像：`convledger memory --digest --class 画像` 跨全部项目取最近 8 个会话（每行带 `<项目>:<sid8>:Sxx`）→ `convledger memory --put - --scope user`。画像证据要跨 ≥2 个会话、每条带 `project`、只认真人原话（工具回执不算），用户表只收画像。
 - 晋升与撤销：`convledger memory --promote M03` 只有在这条规则能在 ≥2 个项目里找到等价条目时才写用户表副本（G8），失败不写任何文件；`--unpromote U01` 删副本并把来源条目的 `promoted_to` 回 null。
 - 导出到项目：`convledger export` 把项目进度与用户画像写进 `<项目>/convledger-export/`（`PROGRESS.md`、`USER-PROFILE.md`、`INDEX.md`、`archive/`）。内容变了才存快照，**每项目合计**留 30 份；自动刷新只添不删，显式 `export` 才剪（先 `--dry-run` 看会删哪几个）；`--put`/`--promote`/`--unpromote` 成功后会**自动刷新**；交接前用 `export --check` 确认新鲜（不新鲜 exit 1）。
-- 项目任务（跨会话）：`convledger progress --project <键>` 看主阶段/欠项/下一行动；收尾时 `sync --prepare` → 按素材写 `{batchId, baseRevision, taskChanges[], events[], candidates[], dispositions[]}` → `sync --put`。每个材料单元都要有处置（绑定/无变化/待整理），不要空提交吞掉新要求；`--from-line N` 只用于受控起点，用了就在回执里写明。
+- 项目任务（跨会话）：`convledger progress --project <键>` 看主阶段/欠项/下一行动；收尾时 `sync --prepare` → 按素材写 `{batchId, baseRevision, taskChanges[], events[], candidates[], dispositions[]}` → `sync --put`。每个材料单元都要有处置（绑定/无变化/待整理），不要空提交吞掉新要求；`--from-line N` 只用于受控起点，用了就在回执里写明。**更新已有任务必须 `{id, patch}`；`localKey` 只用于新建**（拿它更新会多出一条重复任务）。任务字段有上限（title≤18、result/remaining≤60），超了会被拒。**一次收尾提示可能跨多批**：`sync --prepare` 只冻 6,000 tok 前缀，回执给 `omittedFrom` 就接着 prepare，直到覆盖完。**闸门只认素材里逐字出现过的字面**：英文词、文件名、数字不在 digest 素材里就换写成素材里有的词，别放宽判据。
 
 闸门不过就不写，**不要改判据去迁就文字**。
 
@@ -121,6 +125,8 @@ description: 用 convledger 账本回答「之前做到哪了 / 上次那个是�
 | `sync --retry` | `--project` | 只重试 outbox 里待发布的记忆，不越过闸门 |
 | `sync --dismiss C001` | `--project` `--why` | 把失败候选标 dismissed；该条目没有其他待发布候选时一并收口 |
 | `map` | `--port` `--rebuild` `--session` `--open` `--stop` | 确保 hub 在跑并给出本会话画布地址 `/s/<ID>/`（横幅：URL、会话、宿主、cwd、段数、归档） |
+| `url` | `--copy` | 确保 hub 在跑，打印会话库地址；`--copy` 放进剪贴板 |
+| `setup` | `--check` `--build N` `--all` `--no-hooks` `--no-shortcut` `--no-open` `--uninstall` | 新设备一键：找宿主、装 Skill/hooks、建最近 20 段账、写桌面入口、起 hub；`--uninstall` 只撤自己写的 |
 | `outstanding` | `--json` | 链路自检：缺哪些块综述/任务题名/尾段阶段/未成章阶段/待证候选/待办请求；只列不写 |
 | `lessons` | `--limit N` `--json` | 可复用经验：已写 lesson 的块（新→旧），带当时要求与回读锚点；锚点失效的不列 |
 | `brief` | `--phase N` `--chapter N` | 恢复第一跳：有章出章模式（每章一行＋目的，只展开最后一章），没章出阶段摘要＋尾段声明；`--chapter` 给该章九格，`--phase` 给该阶段六格与块表 |
@@ -170,5 +176,8 @@ description: 用 convledger 账本回答「之前做到哪了 / 上次那个是�
 ## 维护
 
 正本在仓库 `tool/skill/convledger/SKILL.md`；改完跑 `node {{TOOL_ROOT}}/tool/skill/install.mjs` 同步到各宿主用户级目录（`~/.qoder/skills/convledger/`、`~/.workbuddy/skills/convledger/`），`--check` 只比对不写。正本里的入口用 `{{TOOL_ROOT}}` 占位，install.mjs 安装时渲染成仓库实际路径——换机器或搬仓后重新安装即可，不用改正本。
+
+- 自测：`node {{TOOL_ROOT}}/tool/test/selftest.mjs`；跨平台用 `CONVLEDGER_SELFTEST_SESSION` 指一段会话。全量 9–11 分钟，**跑着别改源码**。
+- 提交前密钥扫描：`node {{TOOL_ROOT}}/tool/scan-secrets.mjs`（扫历史与暂存区，`--staged` 只扫暂存）；本仓已把 `core.hooksPath` 指到 `.githooks`，`pre-commit` 会跑一次。
 
 **改了 `tool/src/` 或 `tool/web/` 之后，页面要重启 hub 才变**：hub 是常驻进程，`project-page.mjs`、`map.mjs` 这些模块在进程启动时就加载进内存了（`atlas.js`/`atlas.css` 是每次请求现读，带 mtime 版本号，刷新即可）。所以改完 src 记得 `convledger map --stop && convledger map`，别对着没变的页面怀疑自己改错了。
