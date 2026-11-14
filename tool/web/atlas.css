@@ -79,7 +79,8 @@ body {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  font: 13px/1.45 -apple-system, "Segoe UI", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  /* 中文优先微软雅黑 UI（Windows 上小字号更实），macOS 自然落到苹方；拉丁仍用 Segoe UI。 */
+  font: 13px/1.45 -apple-system, "Segoe UI", "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Noto Sans SC", system-ui, sans-serif;
   color: var(--fg);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -107,7 +108,7 @@ header {
   backdrop-filter: blur(14px);
 }
 .brand { grid-area: brand; display: flex; align-items: center; white-space: nowrap; }
-.brandline { display: flex; align-items: baseline; gap: 8px; }
+.brandline { display: flex; align-items: center; gap: 8px; }
 .brand b { font-size: 13px; letter-spacing: .02em; color: var(--accent); font-weight: 600; }
 .brand span { font-size: 11.5px; color: var(--muted); letter-spacing: .02em; }
 .nav, .acts {
@@ -115,7 +116,7 @@ header {
   padding: 4px; border: 1px solid var(--line); border-radius: 12px; background: var(--hover);
 }
 .nav { grid-area: nav; }
-.acts { grid-area: acts; }
+.acts { grid-area: acts; flex-wrap: wrap; }
 .nav > button, .acts > button {
   display: inline-flex; align-items: center; gap: 5px;
   height: 26px; padding: 0 10px; border: 0; border-radius: 8px;
@@ -126,15 +127,6 @@ header {
 .nav > button:hover, .acts > button:hover { background: var(--card2); color: var(--fg); }
 .nav > button[aria-pressed="true"] { background: var(--card); color: var(--fg); box-shadow: var(--shadow); }
 .acts > button:active { transform: translateY(1px); }
-/* 补账档位：跟着操作组排，读起来像本机设置而不是第二个按钮 */
-.cadence { display: inline-flex; align-items: center; gap: 4px; padding-left: 4px; border-left: 1px solid var(--line); }
-.cadence span { font-size: 10.5px; color: var(--muted); white-space: nowrap; }
-.cadence select {
-  height: 24px; padding: 0 2px; border: 0; border-radius: 6px;
-  background: transparent; color: var(--fg2); font: inherit; font-size: 11px; cursor: pointer;
-}
-.cadence select:hover { background: var(--card2); color: var(--fg); }
-.cadence select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 #now { color: var(--ok); }
 /* 这段画布是谁的：身份、模型、目录、会话、起止、归档——一眼分清「我在看哪段」。
    独占第二行，和第一行的操作分开，不再和搜索框抢宽度。 */
@@ -172,6 +164,17 @@ header .live { grid-area: live; justify-self: end; display: inline-flex; align-i
 header .live::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); }
 header .live.ok::before { background: var(--ok); }
 header .live.bad::before { background: var(--bad); }
+/* 后台重算时，同步点变成转圈：纯 CSS，不吃点击，前台交互不停（PRD-refresh）。 */
+header .live.refreshing { color: var(--fg2); }
+header .live.refreshing::before {
+  width: 11px; height: 11px; background: transparent;
+  border: 2px solid var(--line2); border-top-color: var(--accent);
+  animation: livespin .7s linear infinite;
+}
+@keyframes livespin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  header .live.refreshing::before { animation: none; border-top-color: var(--accent); }
+}
 @media (max-width: 1180px) {
   header {
     grid-template-columns: auto auto minmax(0, 1fr) auto auto;
@@ -279,6 +282,11 @@ body.lib-drag, body.lib-drag * { cursor: col-resize !important; user-select: non
 .librow:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .librow .dot { flex: none; width: 7px; height: 7px; margin-top: 5px; border-radius: 50%; background: var(--muted); }
 .librow.is-live .dot { background: var(--ok); }
+/* 未导入的旧对话：标灰＋虚线框＋空心点，点得开但一眼区别于已建账（PRD-load §2.3）。 */
+.librow.unbuilt { border-style: dashed; border-color: var(--line); }
+.librow.unbuilt:hover { border-color: var(--line2); }
+.librow.unbuilt .ltt { color: var(--muted); }
+.librow.unbuilt .dot { background: transparent; border: 1px solid var(--line2); }
 .librow .lt { flex: 1 1 auto; min-width: 0; }
 .librow .ltt { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--fg); }
 .librow .ltt .t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -329,6 +337,32 @@ body.lib-rail #libsplit::after { background: var(--line); }
   user-select: none;
 }
 #stage.grabbing { cursor: grabbing; }
+/* 首屏占位：大账本要读一会儿，先把「在做什么」画出来，别只留一片点阵。 */
+#bootskel {
+  position: absolute; inset: 0; z-index: 6;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; pointer-events: none;
+}
+#bootskel .bslabel { font-size: 12.5px; color: var(--fg2); letter-spacing: .02em; }
+#bootskel .bshint { font-size: 10.5px; color: var(--muted); }
+#bootskel .bsrow { display: flex; gap: 18px; }
+#bootskel .bsrow i {
+  display: block; width: 152px; height: 64px; border-radius: 10px;
+  border: 1px solid var(--line2);
+  background: linear-gradient(100deg, var(--hover) 30%, var(--card) 50%, var(--hover) 70%);
+  background-size: 220% 100%;
+  animation: bshimmer 1.5s linear infinite;
+}
+@keyframes bshimmer { from { background-position: 220% 0; } to { background-position: -220% 0; } }
+@media (prefers-reduced-motion: reduce) { #bootskel .bsrow i { animation: none; } }
+/* 会话清单的空档同样给骨架，别只写两个字 */
+.libskel { display: flex; flex-direction: column; gap: 9px; padding: 12px; }
+.libskel i { height: 13px; border-radius: 5px; background: var(--hover); opacity: .9; }
+.libskel i:nth-child(odd) { width: 84%; }
+.libwait { padding: 0 12px 8px; }
+[aria-busy="true"] .libskel { animation: bspulse 1.4s ease-in-out infinite; }
+@keyframes bspulse { 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { [aria-busy="true"] .libskel { animation: none; } }
 body[data-theme="dark"] #stage::after {
   content: "";
   position: absolute; inset: 0; pointer-events: none;
@@ -337,7 +371,8 @@ body[data-theme="dark"] #stage::after {
 #world {
   position: absolute; left: 0; top: 0;
   transform-origin: 0 0;
-  will-change: transform;
+  /* 不常驻 will-change：常驻提升层会按 1× 栅格化再放大，放大到 170% 时字发虚。
+     只在移动/缩放进行中临时打开，停手后由 JS 收回，让浏览器按当前比例重画。 */
 }
 #grid {
   position: absolute; left: -6000px; top: -6000px;
@@ -514,7 +549,7 @@ body[data-theme="dark"] #stage::after {
 .psolved {
   flex: none;
   margin-top: 4px;
-  font-size: 11.5px; line-height: 1.4; color: var(--fg2);
+  font-size: 12px; line-height: 1.45; color: var(--fg2);
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
   overflow: hidden; word-break: break-word;
 }
@@ -532,8 +567,16 @@ body[data-theme="dark"] #stage::after {
   font-size: 10.5px; white-space: nowrap; font-variant-numeric: tabular-nums;
 }
 .chip.vf { color: var(--lv3); }
+.chip.pend { color: var(--q); border: 1px solid currentColor; background: transparent; }
+.msrc.pend { color: var(--q); }
+/* 待补综述的块：右下角一个橙点，远景/中景/近景都在，扫一眼就知道哪些还没人写。 */
+.p.pending::before {
+  content: ""; position: absolute; right: 10px; bottom: 10px;
+  width: 7px; height: 7px; border-radius: 2px; background: var(--q); opacity: .9;
+}
 .chip.orgfull { color: var(--ok); border: 1px solid var(--ok); }
 .chip.orgpart { color: var(--q); border: 1px solid var(--q); }
+.chip.orgnone { color: var(--muted); border: 1px solid var(--line2); }
 .chip.vf0 { color: var(--muted); }
 .chip.bad { color: var(--bad); }
 .chip.q { color: var(--q); }
@@ -557,11 +600,11 @@ body[data-theme="dark"] #stage::after {
 .claim { display: flex; align-items: center; gap: 6px; height: 20px; font-size: 11.5px; color: var(--fg2); min-width: 0; }
 .csid { flex: none; font-size: 10px; font-weight: 600; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; color: var(--lv3); }
 .ctext { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pnone { font-size: 11px; line-height: 1.55; color: var(--muted); padding-top: 2px; }
+.pnone { font-size: 12px; line-height: 1.5; color: var(--fg2); padding-top: 2px; }
 .pfoot {
   flex: none; margin-top: auto;
   display: flex; align-items: center; gap: 6px;
-  height: 16px; font-size: 10.5px; color: var(--muted); white-space: nowrap;
+  height: 16px; font-size: 11px; color: var(--muted); white-space: nowrap;
 }
 .frange { font-variant-numeric: tabular-nums; }
 .pinfo {
@@ -610,7 +653,12 @@ body[data-theme="dark"] #stage::after {
 .fstep i { font-style: normal; font-size: 17px; color: var(--muted); }
 /* 38px 是量出来的：卡内宽 300－边框－左右内边距＝274px，7 个汉字 266px 刚好放下，
    再大一号就把 mark 的最后一个字裁掉——裁字是静默的信息损失，宁可字号让一步。 */
-.fwhat { font-size: 38px; line-height: 1.15; color: var(--fg); white-space: nowrap; overflow: hidden; }
+/* 远景两行：标题短就一行读完，长一点也能读到句子尾巴，不再只剩开头几个字。 */
+.fwhat {
+  font-size: 26px; line-height: 1.12; color: var(--fg);
+  white-space: normal; overflow: hidden;
+  display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
+}
 
 /* 中景：第几步、属于哪一块、要干什么（真人原话）、解决了什么（已证增量或产物）。 */
 /* 插曲块多一行身份：夹在第几步与第几步之间、借的是哪条支。这一行就是
@@ -691,7 +739,7 @@ body[data-theme="dark"] #stage::after {
 .htxt { font-size: 11.5px; color: var(--fg2); line-height: 1.35; margin-top: 1px; overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .hnone { font-size: 11px; color: var(--muted); padding: 8px; line-height: 1.5; }
 .brandmark {
-  display: inline-block; width: 20px; height: 20px; vertical-align: -4px;
+  display: inline-block; width: 24px; height: 24px; flex: none;
   background: currentColor;
   -webkit-mask: url('/icon-small.svg') center / contain no-repeat;
   mask: url('/icon-small.svg') center / contain no-repeat;
@@ -1002,7 +1050,7 @@ pre.ibody {
    字重保持设计里的层级（苹方与 Noto 都有真字重，不像楷体只有常规一个字重）。 */
 :root {
   --ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", "Segoe UI",
-        "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei UI", "Microsoft YaHei", system-ui, sans-serif;
+        "Microsoft YaHei UI", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", system-ui, sans-serif;
 }
 body, body *, body *::before, body *::after { font-family: var(--ui) !important; }
 .back-project {
@@ -1085,3 +1133,25 @@ body[data-theme="light"] {
   border-radius: 12px;
 }
 #asksend { background: var(--fg); color: var(--bg); border: 0; }
+
+/* ---------- 嵌入 App 外壳（?embed=1）：去掉第二层 chrome ----------
+   App 已有左栏导航与顶栏标题。画布嵌进来时只留一条功能控件（搜索 / 现在 / 适应 /
+   主题 / 三档 / 同步），品牌、视图切换 tab、左栏会话清单、身份指标全部让位——
+   整屏只有一套导航，不再像「把整页塞进一块板里」。控件仍住在画布自己的文档里，
+   不做跨 iframe 接线，缩放 / 搜索 / 档位移不动也丢不了。 */
+body.embed header {
+  grid-template-columns: minmax(140px, 1fr) auto auto;
+  grid-template-areas: "find acts live";
+  gap: 8px;
+  padding: 6px 12px;
+}
+body.embed .brand,
+body.embed .nav,
+body.embed .meters,
+body.embed .who { display: none; }
+body.embed #lib,
+body.embed #libsplit { display: none; }
+/* 窄 pane：图标按钮收紧，控件不挤出顶栏 */
+@media (max-width: 720px) {
+  body.embed .acts > button { padding: 0 7px; }
+}

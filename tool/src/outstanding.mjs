@@ -6,6 +6,8 @@ import { readState } from './state-io.mjs';
 import { projectKey } from './projects.mjs';
 import { readRequests } from './notes.mjs';
 import { CHAP_MIN_PHASES } from './cost.mjs';
+import { draftPhaseRanges } from './brief.mjs';
+import { memoryDue } from './profile-auto.mjs';
 
 export function outstandingFor({ storeRoot, sessionId, cwd = null }) {
   const dir = storeDir(storeRoot, sessionId);
@@ -37,13 +39,9 @@ export function outstandingFor({ storeRoot, sessionId, cwd = null }) {
   }
   if (missingTitles) items.push(`支线题名缺 ${missingTitles} 条`);
   if (tail && !liveTail) {
-    // 只做边界草稿，不写说明：每 8 步一段，末段 <2 步就并回上一段。
-    for (let s = tail.from; s <= tail.to; s += 8) draftRanges.push([s, Math.min(s + 7, tail.to)]);
-    if (draftRanges.length > 1) {
-      const a = draftRanges[draftRanges.length - 2], b = draftRanges[draftRanges.length - 1];
-      if (b[1] - b[0] + 1 < 2) { a[1] = b[1]; draftRanges.pop(); }
-    }
-    items.push(`尾段第 ${tail.from}–${tail.to} 步没有阶段说明（候选区间：${draftRanges.map(([a, b]) => `${a}–${b}`).join('、')}）`);
+    // 边界草稿与 brief 里那行共用 draftPhaseRanges：两处各写一遍，切法迟早会漂。
+    draftRanges = draftPhaseRanges(tail.from, tail.to);
+    items.push(`尾段第 ${tail.from}–${tail.to} 步没有阶段说明（候选区间：${draftRanges.map(([a, b]) => (a === b ? `${a}` : `${a}–${b}`)).join('、')}）`);
   }
   if (pendingCandidates) items.push(`待证候选 ${pendingCandidates} 条`);
   if (pendingRequests) items.push(`待办请求 ${pendingRequests} 条`);
@@ -54,10 +52,22 @@ export function outstandingFor({ storeRoot, sessionId, cwd = null }) {
   if (uncharted.length >= CHAP_MIN_PHASES) {
     items.push(`已写的 ${uncharted.length} 段阶段还没并进章（第 ${chTo + 1}–${v.phases.reduce((m, p) => Math.max(m, p.to), 0)} 步）：chapters --digest → chapters --put`);
   }
+  // 记忆归纳（PRD-memory §十二）：看增量不看日历。这里只报「攒够了」，不催每轮——
+  // 增量没涨就不出现，所以它天然不会变成噪音。
+  let memDue = null;
+  try {
+    memDue = memoryDue(storeRoot, key);
+    if (memDue.project.due) {
+      items.push(`项目记忆该归纳了（自上次归纳新增 ${memDue.project.lessons} 条带经验的块、${memDue.project.sessions} 个会话）：memory --digest --project ${key} → memory --put -`);
+    }
+    if (memDue.user.due) {
+      items.push(`用户画像该更新了（自上次新增 ${memDue.user.sessions} 个会话）：memory --digest --class 画像 → memory --put - --scope user`);
+    }
+  } catch { /* 判定失败不影响其它欠项 */ }
   return {
     ok: !items.length, project: key, session: sessionId,
     blocks: v.steps.length, missingBlocks, missingTitles, tail, liveTail, liveBlocks, draftRanges,
-    pendingCandidates, pendingRequests, unchartedPhases: uncharted.length, items,
+    pendingCandidates, pendingRequests, unchartedPhases: uncharted.length, memoryDue: memDue, items,
     // 整理过多少＝还有效的模型条目，hash 对不上的不计（与画布回落同一把尺）。
     // 会话库与 sessions 都读这一份，不再各数各的。
     written: {

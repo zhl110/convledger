@@ -5,8 +5,9 @@
 import { tok, readJsonl, kb } from './lib.mjs';
 import { normalizeRecords } from './project.mjs';
 
-export function buildFacts({ runner, mainFile, sidecarDir, records, boundaries, branches, turns }, segments) {
-  const raw = normalizeRecords(runner, readJsonl(mainFile));
+export function buildFacts({ runner, mainFile, sidecarDir, records, boundaries, branches, turns }, segments, opts = {}) {
+  // 按片建账时由 window.mjs 递一片已 normalize 的记录进来；否则维持原来的整份重读。
+  const raw = opts.rawRecords ?? normalizeRecords(runner, readJsonl(mainFile));
   const sum = (arr, f) => arr.reduce((a, x) => a + f(x), 0);
   const runtimeConfigs = raw.filter((r) => r.type === 'runtime-config' && r.model);
   const perRecordModels = raw.map((r) => r.__model).filter(Boolean);

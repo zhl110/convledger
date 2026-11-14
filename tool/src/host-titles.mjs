@@ -79,16 +79,19 @@ let ocCache = { key: '', title: new Map() };
 /** OpenCode 的官方标题在 SQLite 的 session.title；只读、按库文件 mtime+size 失效。 */
 function opencodeTitles() {
   const file = opencodeDb();
-  const key = stamp(file);
+  // 2.2.6 起标题在 session_v2；旧 session 表 2026-10-19 起停更（读旧表会让标题全丢）。
+  const key = `${stamp(file)}|${stamp(`${file}-wal`)}`;
   if (ocCache.key === key) return ocCache.title;
   const map = new Map();
   let DatabaseSync = null;
   try { ({ DatabaseSync } = require('node:sqlite')); } catch { /* 老 Node：回落账本 */ }
-  if (DatabaseSync) {
+  if (DatabaseSync && fs.existsSync(file)) {
     let db = null;
     try {
       db = new DatabaseSync(file, { readOnly: true });
-      const rows = db.prepare("select id, title from session where title is not null and trim(title) <> ''").all();
+      const has = db.prepare("select name from sqlite_master where type='table' and name in ('session_v2','session')").all().map((r) => String(r.name));
+      const table = has.includes('session_v2') ? 'session_v2' : 'session';
+      const rows = db.prepare(`select id, title from ${table} where title is not null and trim(title) <> ''`).all();
       for (const r of rows) {
         const id = String(r.id ?? ''), title = String(r.title ?? '').trim();
         if (id && title) map.set(id, title);

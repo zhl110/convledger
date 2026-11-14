@@ -1,6 +1,6 @@
 // 项目层：把同一个工作目录下的会话归成一个项目。
 // 归组只认 normCwd 整串相等（与 current.mjs 的当前会话解析同一把尺），不做前缀/父子推断：
-// <workspace> 与 <workspace>/sub 是两个项目。没有 cwd 的账只进「未归组」，不塞给任何项目。
+// D:/work 与 D:/work/sub 是两个项目。没有 cwd 的账只进「未归组」，不塞给任何项目。
 // 零模型：每个数字都从账本现算，成员表每次重扫——账本删了不会在项目里留下残影。
 import fs from 'node:fs';
 import path from 'node:path';
@@ -15,7 +15,7 @@ const readJson = (file) => {
 
 export { projectKey };
 
-/** 显示用的根路径：保留出现最多的那种拼写（<workspace> 压过 <workspace>），斜杠转正、去尾斜杠。 */
+/** 显示用的根路径：保留出现最多的那种拼写（D:\mycode 压过 d:\mycode），斜杠转正、去尾斜杠。 */
 const displayRoot = (members) => {
   const count = new Map();
   for (const m of members) {

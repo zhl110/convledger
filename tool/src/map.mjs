@@ -16,24 +16,24 @@
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
-import { build } from './build.mjs';
-import { loadLedger, renderBody, resolveSegments, storeDir, writeStore, syncArchive, archiveState } from './store.mjs';
+import crypto from 'node:crypto';
+import { loadLedger, renderBody, resolveSegments, storeDir, syncArchive, archiveState } from './store.mjs';
 import { readView } from './view.mjs';
 import { handoffText } from './brief.mjs';
-import { syncOpencodeSession } from './opencode.mjs';
 import { appendNote, appendRequest } from './notes.mjs';
 import { BODY_BUDGET_TOKENS } from './cost.mjs';
-import { findSession, libraryOf } from './library.mjs';
-import { projectsOf } from './projects.mjs';
+import { findSession, isDefaultStore, LIVE_MIN } from './library.mjs';
 import { readState, stateFile } from './state-io.mjs';
 import { projectView } from './progress.mjs';
-import { projectLive } from './project-live.mjs';
-import { listSessions } from './project.mjs';
-import { projectPageHtml } from './project-page.mjs';
+import { sourceIndex } from './project.mjs';
+import { projectPageHtml, projectEmptyHtml } from './project-page.mjs';
 import { readPrefs, writePrefs } from './prefs.mjs';
-import { projectExperience, projectProfile } from './insights.mjs';
+import { readLlm, writeLlm, clearLlm, setEnabled, llmOn, maskKey, probeEndpoints, detectBridge, pickModel, testLlm, saveKeyEntry, listSavedKeys, useSavedKey, removeSavedKey, ensureActiveSaved } from './llm.mjs';
+import { runIntegration } from './status.mjs';
+import { createRefresh } from './refresh.mjs';
 
 const WEB = new URL('../web/', import.meta.url).pathname.replace(/^\/(\w:)/, '$1').replace(/\\/g, '/');
+const CLI = new URL('../bin/convledger.mjs', import.meta.url).pathname.replace(/^\/(\w:)/, '$1').replace(/\\/g, '/');
 // fixed allowlist, not a path join: the url comes from a browser.
 // `/` 是会话库；`/s/<sid>/` 出流程图；`/atlas` 留作旧别名（跳到最近写入的那段会话）。
 const ASSETS = {
@@ -43,8 +43,19 @@ const ASSETS = {
   '/atlas.css': ['atlas.css', 'text/css; charset=utf-8'],
   '/atlas.js': ['atlas.js', 'text/javascript; charset=utf-8'],
   '/architecture': ['architecture.html', 'text/html; charset=utf-8'],
+  '/vendor/three.module.min.js': ['vendor/three.module.min.js', 'text/javascript; charset=utf-8'],
   '/icon.svg': ['icon.svg', 'image/svg+xml'],
   '/icon-small.svg': ['icon-small.svg', 'image/svg+xml'],
+  '/favicon.ico': ['convledger.ico', 'image/x-icon'],
+  '/convledger.ico': ['convledger.ico', 'image/x-icon'],
+  '/manifest.webmanifest': ['manifest.webmanifest', 'application/manifest+json'],
+  '/app': ['app.html', 'text/html; charset=utf-8'],
+  '/app.css': ['app.css', 'text/css; charset=utf-8'],
+  '/app.js': ['app.js', 'text/javascript; charset=utf-8'],
+  '/icons/icon-192.png': ['icons/icon-192.png', 'image/png'],
+  '/icons/icon-512.png': ['icons/icon-512.png', 'image/png'],
+  '/icons/icon-192-v2.png': ['icons/icon-192-v2.png', 'image/png'],
+  '/icons/icon-512-v2.png': ['icons/icon-512-v2.png', 'image/png'],
   '/agent-icons/qoder.png': ['agents/qoder.png', 'image/png'],
   '/agent-icons/claude-code.png': ['agents/claude-code.png', 'image/png'],
   '/agent-icons/workbuddy.png': ['agents/workbuddy.png', 'image/png'],
@@ -57,32 +68,6 @@ export function asset(url) {
   const hit = ASSETS[String(url).split('?')[0]];
   if (!hit) return null;
   return { type: hit[1], body: fs.readFileSync(path.join(WEB, hit[0])) };
-}
-
-/** 架构页的工作路线图：读当前任务最多的项目，实时生成；不把快照写进 HTML。 */
-function roadmapNow(root) {
-  let best = null;
-  try {
-    const list = projectsOf(root, { withSteps: false }).projects.filter((p) => p.root);
-    for (const p of list) {
-      try {
-        const st = readState(root, p.key).state;
-        if (!best || (st.tasks?.length ?? 0) > (best.state.tasks?.length ?? 0)) best = { key: p.key, state: st };
-      } catch { /* 这个项目的状态读不了，跳过 */ }
-    }
-  } catch { /* 没有项目层 */ }
-  if (!best) return { project: null, revision: 0, milestones: [], tasks: [] };
-  const v = projectView(best.state);
-  return {
-    project: best.key,
-    revision: v.revision,
-    milestones: v.milestones.map((m) => ({ id: m.id, short: m.short, title: m.title, goal: m.goal })),
-    tasks: v.tasks.map((t) => ({
-      id: t.id, pm: t.milestoneId, short: t.short, title: t.title,
-      status: t.status, result: t.result, remaining: t.remaining,
-      accept: (t.acceptance ?? []).map((a) => a.condition),
-    })),
-  };
 }
 
 const HOST_OK = (host, port) => {
@@ -125,6 +110,9 @@ export async function probeHub(port, { tries = 2, timeout = 1500 } = {}) {
 }
 
 export const hubFile = (root) => path.join(path.dirname(root), 'hub.json');
+/** 门禁钥匙单独落盘：hub.json 只记进程与端口，人走灯灭时会删；token 不能跟着消失，
+ *  否则每次重启都换钥匙，已开着的应用窗会停在启动页（2026-11-14 用户报障）。 */
+export const hubTokenFile = (root) => path.join(path.dirname(root), 'hub-token');
 
 function listenOnce(server, port) {
   return new Promise((resolve, reject) => {
@@ -143,13 +131,16 @@ const iso = (t) => {
   return Number.isNaN(d.getTime()) ? null : d.toISOString();
 };
 
-/** 每段会话一份运行态：归档同步一次，重建按 TTL 节流。没人看的会话不重建。 */
+/** 每段会话一份运行态：归档同步一次。重算与节流交给 refresh 管理器（后台 worker）。 */
 const SESS = new Map();   // `${root}\0${id}` -> state
 function stateOf(root, id) {
   const key = `${root}\0${id}`;
   let st = SESS.get(key);
   if (!st) {
-    st = { id, dir: storeDir(root, id), lastError: null, lastBuiltMs: 0, building: null, synced: false };
+    st = { id, dir: storeDir(root, id), lastError: null, synced: false, sourceFile: null };
+    // 源文件：已建账读 ledger；未建账（打开旧对话）从廉价源索引取，供后台 build 用。
+    try { st.sourceFile = JSON.parse(fs.readFileSync(path.join(st.dir, 'ledger.json'), 'utf8')).sourceFile ?? null; } catch { /* 还没建账 */ }
+    if (!st.sourceFile && isDefaultStore(root)) st.sourceFile = sourceIndex().byId.get(id)?.file ?? null;
     SESS.set(key, st);
   }
   return st;
@@ -164,108 +155,61 @@ function syncArchiveOnce(st) {
   } catch { /* 账本还读不到：重建会把原因写进 lastError */ }
 }
 
-function rebuildOnce(root, st) {
-  const ledger = JSON.parse(fs.readFileSync(path.join(st.dir, 'ledger.json'), 'utf8'));
-  const file = ledger.sourceFile;
-  // OpenCode 的画布源是投影文件：重建前先把 DB 里新到的消息投影进来（没变就不动）。
-  if (ledger.runner === 'opencode') {
-    try { syncOpencodeSession(ledger.sessionId); }
-    catch (e) { st.lastError = `OpenCode 投影同步失败：${String(e?.message ?? e).split('\n')[0]}`; }
-  }
-  if (!file || !fs.existsSync(file)) {
-    // 源被运行器清掉不是「画面该消失」：最后一次构建还在、归档还在，
-    // 如实说清楚，页面继续可看、/body 继续可读。
-    const a = archiveState(st.dir);
-    st.lastError = a.exists
-      ? `源日志不在（${file}），画面用最后一次构建；正文读归档（${a.bytes} 字节，同步于 ${a.syncedAt}）`
-      : `找不到源日志 ${file}，也没有归档——只能看最后一次构建`;
-    return;
-  }
-  syncArchive(st.dir, file);
-  writeStore(root, build(file, { storeRoot: root }));
-  st.lastError = null;
-}
-
-async function ensureFresh(root, st, rebuildSec) {
-  if (rebuildSec <= 0) { syncArchiveOnce(st); return; }
-  if (Date.now() - st.lastBuiltMs < rebuildSec * 1000) return;
-  if (!st.building) {
-    st.building = Promise.resolve()
-      .then(() => { try { rebuildOnce(root, st); } catch (e) { st.lastError = String(e?.message ?? e).split('\n')[0]; } st.lastBuiltMs = Date.now(); })
-      .finally(() => { st.building = null; });
-  }
-  await st.building;
-}
-
 /** 旧别名 /atlas 落点：最近写入的那段会话（源 mtime 优先，归档/builtAt 兜底）。 */
-function newestSession(root) {
+async function newestSession(root, refresh) {
   try {
-    const all = libraryOf(root).groups.flatMap((g) => g.sessions);
+    // 从 worker 快照缓存取；缓存还没算好就返回 null，绝不在 /atlas 这一跳同步扫全库。
+    const all = ((await refresh.getSessions(root)).payload.groups ?? []).flatMap((g) => g.sessions ?? []);
     all.sort((a, b) => String(b.lastWriteAt ?? b.builtAt ?? '').localeCompare(String(a.lastWriteAt ?? a.builtAt ?? '')));
     return all[0]?.id ?? null;
   } catch { return null; }
 }
 
-/** 有任务状态的项目清单：只读 progress-state.json，名字从项目层取（取不到就用键）。 */
-let projCache = { at: 0, data: [] };
-function projectSummaries(root) {
-  if (Date.now() - projCache.at < 5000) return projCache.data;
-  const dir = path.resolve(root, '..', 'projects');
-  let names = new Map();
-  try { names = new Map(projectsOf(root, { withSteps: false }).projects.map((p) => [p.key, p.name])); } catch { /* 名字取不到就用键 */ }
-  const rows = [];
-  let entries = [];
-  try { entries = fs.readdirSync(dir); } catch { /* 还没有 projects 目录 */ }
-  for (const key of entries) {
-    if (!/^p-[0-9a-f]{12}$/.test(key) || !fs.existsSync(path.join(dir, key, 'progress-state.json'))) continue;
-    try {
-      const state = readState(root, key).state;
-      const v = projectView(state);
-      rows.push({ key, name: names.get(key) ?? key, revision: state.revision, tasks: v.tasks.length, counts: v.counts.project });
-    } catch { /* 坏状态不列 */ }
-  }
-  rows.sort((a, b) => b.revision - a.revision || a.name.localeCompare(b.name));
-  projCache = { at: Date.now(), data: rows };
-  return rows;
-}
-
-
-// 新会话自动入库：页面每次被请求时（15 秒一次）扫一遍源目录，源日志超过 20KB 但还没有
-// ledger.json 的会话直接建账，下次刷新就在左栏里。只对默认 store 生效——测试用的临时
-// store 绝不能去扫真会话。
-const DEFAULT_STORE = path.resolve(WEB, '..', 'out', 'store').replace(/\\/g, '/');
-// 项目页 5 秒轮询：经验要读最近几本账的视图，别每 5 秒重算一遍；缓存 15 秒。
-const insightsCache = new Map();
-function insightsOf(root, key) {
-  const id = `${root}|${key}`;
+// 【2026-11-13 卡死修复】项目清单、项目成员、项目页 live/经验/画像/记忆欠项这些全库重活
+// 原先都在主线程同步跑（projectsOf 11.7s、projectLive 9.7s），5 秒轮询把事件循环堵死。
+// 现在统一由 createRefresh() 的 worker 缓存供货，主线程只回缓存、只标 refreshing。
+// 新会话自动入库（PRD-load）：只对默认 store 生效（DEFAULT_STORE 由 library 统一给出）——
+// 测试用的临时 store 绝不能去扫真会话。建账本身全在后台 worker，主线程只派发。
+// 主线程每 15s 一次 GET 触发：空闲就派一个 sweep 给 worker。主线程不再 listSessions/build——
+// 那正是多 agent＋长对话把机器卡死重启的病根（旧版在这里同步建全机旧对话）。
+let sweepAt = 0;
+function sweepNewSessions(root, refresh) {
+  if (!isDefaultStore(root)) return;
   const now = Date.now();
-  const hit = insightsCache.get(id);
-  if (hit && now - hit.at < 15000) return hit.data;
-  const data = { experience: projectExperience(root, key), profile: projectProfile(root, key) };
-  insightsCache.set(id, { at: now, data });
-  return data;
-}
-let sweepAt = 0, sweepBusy = false;
-function sweepNewSessions(root) {
-  if (String(root).replace(/\\/g, '/') !== DEFAULT_STORE) return;
-  const now = Date.now();
-  if (sweepBusy || now - sweepAt < 15000) return;
-  sweepAt = now; sweepBusy = true;
-  setTimeout(() => {
-    try {
-      const have = new Set(fs.existsSync(root) ? fs.readdirSync(root).filter((d) => fs.existsSync(path.join(root, d, 'ledger.json'))) : []);
-      const fresh = listSessions().filter((s) => s.bytes > 20000 && !have.has(s.sessionId));
-      for (const s of fresh) {
-        try { writeStore(root, build(s.file, { storeRoot: root })); } catch { /* 一段建不起来不拖垮别的 */ }
-      }
-    } catch { /* 扫不动就等下一次 */ }
-    finally { sweepBusy = false; }
-  }, 0);
+  if (now - sweepAt < 15000) return;
+  sweepAt = now;
+  const { autoBuild } = readPrefs(root);
+  refresh.sweep(root, { mode: autoBuild, liveMin: LIVE_MIN, cap: 1 });
 }
 export async function serveMap(opts = {}) {
   const { root, rebuildSec = 20, pidFile = null } = opts;
   const port0 = opts.port ?? opts.ports?.[0] ?? 8765;
   const startedAt = new Date().toISOString();
+  // 重算与节流全交给它：视图先回缓存、后台 worker 再算新的，前台永不阻塞。
+  const refresh = createRefresh();
+  // ---- 门禁 token（2026-11-14 用户要求：浏览器 Web 入口下线，只留桌面应用窗）----
+  // token 落在本机 out/hub.json。已有合法 token 就沿用——hub 重启不换钥匙，
+  // 已开着的应用窗停几秒后轮询自动恢复，不用重开窗口；首次（没记录）才生成新的。
+  const keyFile = opts.keyFile ?? hubTokenFile(root);
+  const hubToken = (() => {
+    // 先读专用钥匙文件，再兼容旧版只存在 hub.json 里的 token；都没有才生成。
+    for (const f of [keyFile, pidFile]) {
+      if (!f) continue;
+      try {
+        const raw = fs.readFileSync(f, 'utf8').trim();
+        const t = raw.startsWith('{') ? JSON.parse(raw).token : raw;
+        if (typeof t === 'string' && /^[0-9a-f]{48}$/.test(t)) return t;
+      } catch { /* 换下一个来源 */ }
+    }
+    return crypto.randomBytes(24).toString('hex');
+  })();
+  try {
+    fs.mkdirSync(path.dirname(keyFile), { recursive: true });
+    fs.writeFileSync(keyFile, hubToken);
+  } catch { /* 写不出钥匙文件＝老窗口下次重启会掉线；本次仍可用 */ }
+  // ---- 人走灯灭：应用窗活着时页面 4s 一轮询（后台页 10s）；10 分钟零请求＝窗口已关，
+  // hub 自己退出，不留常驻后台。双击图标随时能再拉起来。
+  let lastSeen = Date.now();
 
   const server = http.createServer(async (req, res) => {
     if (!HOST_OK(req.headers.host, port0)) {
@@ -281,36 +225,96 @@ export async function serveMap(opts = {}) {
     };
     const json = (code, obj) => send(code, 'application/json; charset=utf-8', JSON.stringify(obj));
     const redirect = (location) => { res.writeHead(302, { location, 'cache-control': 'no-store' }); res.end(); };
-    if (method === 'GET') sweepNewSessions(root);
+    // /health 排在所有轮询、派生与派活之前，且完全不碰磁盘：探活永远 <1ms。
+    // 旧版要 readdirSync + 逐目录 existsSync（2836 次 stat），且排在重活后面，
+    // 主线程被 projectSummaries 占住时连探活都排不上队 → 页面 Failed to fetch。
+    if (url === '/health' && method === 'GET') {
+      return json(200, { ok: true, hub: true, port: port0, pid: process.pid, startedAt, rebuildSec, sessions: null });
+    }
+    // ---- 门禁：token 在 query（?k=）/ cookie（hubk）/ 头（x-hub-key）任一即可 ----
+    // /health 豁免（探活只回 pid/port，不含 token）；其余一律要票。
+    // 图标/清单也豁免：窗口图标（任务栏）与 PWA 清单由浏览器外壳裸取、常常不带 cookie，
+    // 被挡成 403 会让任务栏回退成浏览器自己的 logo（2026-11-14 用户报障）。
+    const PUBLIC_STATIC = new Set(['/favicon.ico', '/convledger.ico', '/manifest.webmanifest',
+      '/icon.svg', '/icon-small.svg', '/icons/icon-192.png', '/icons/icon-512.png',
+      '/icons/icon-192-v2.png', '/icons/icon-512-v2.png']);
+    const qk = u.searchParams.get('k') || '';
+    const cookieKey = String(req.headers.cookie || '').match(/(?:^|;\s*)hubk=([0-9a-f]+)/)?.[1] || '';
+    const supplied = [qk,
+      cookieKey,
+      String(req.headers['x-hub-key'] || '')]
+      .find((v) => v.length === hubToken.length && crypto.timingSafeEqual(Buffer.from(v), Buffer.from(hubToken)));
+    const isPublic = method === 'GET' && PUBLIC_STATIC.has(url);
+    // 请求留痕（2026-11-14 排查启动卡死）：只记路径与钥匙来源位，不记 token 本身。
+    try {
+      const note = `${qk ? 'k' : '-'}${req.headers.cookie ? 'c' : '-'}${req.headers['x-hub-key'] ? 'h' : '-'} → ${supplied ? 'pass' : isPublic ? 'pub' : '403'}`;
+      fs.appendFileSync(path.join(path.dirname(root), 'hub-requests.log'), `${new Date().toISOString()} ${method} ${url.slice(0, 120)} auth=${note}\n`);
+    } catch { /* 留痕失败不影响服务 */ }
+    if (!supplied && !isPublic) {
+      return send(403, 'text/plain; charset=utf-8', '403 · 本看板只对桌面应用窗口开放（浏览器 Web 入口已下线）。\n从桌面图标打开，或跑 convledger app。\n');
+    }
+    lastSeen = Date.now();
+    // 带 ?k= 的响应刷新 cookie：老窗口里可能还躺着上一任 token 的 cookie，
+    // 只补「没有 cookie」会让 /app.js 继续拿旧钥匙 403、启动页永远转圈（2026-11-14 事故）。
+    if (qk === supplied && cookieKey !== hubToken) {
+      res.setHeader('set-cookie', `hubk=${hubToken}; Path=/; SameSite=Strict; Max-Age=31536000`);
+    }
+    if (method === 'GET') sweepNewSessions(root, refresh);
 
     try {
-      // ---- 项目任务页：/p/<键>/（只读，服务端渲染） ----
+      // ---- 项目工作台：/p/<键>/（只读，服务端渲染） ----
       const pm = url.match(/^\/p\/([^/]+)(\/.*)?$/);
       if (pm) {
         if (method !== 'GET') return send(405, 'text/plain; charset=utf-8', '只支持 GET\n');
         let key = pm[1];
         try { key = decodeURIComponent(key); } catch { /* 非法转义按原样找 */ }
         if (!/^p-[0-9a-f]{12}$/.test(key)) return send(404, 'text/plain; charset=utf-8', `项目键不合法：${String(key).slice(0, 40)}\n`);
-        // 没有状态文件就没有这个项目页：readState 会给空状态，但空状态不该变成一个 200 的假页面
-        if (!fs.existsSync(stateFile(root, key))) return send(404, 'text/plain; charset=utf-8', `这个项目还没有任务状态（${key}）\n`);
-        let state;
-        try { state = readState(root, key).state; } catch (e) { return send(404, 'text/plain; charset=utf-8', `这个项目没有任务状态：${String(e?.message ?? e).split('\n')[0]}\n`); }
         const rest = pm[2] ?? '';
         if (!rest) return redirect(`/p/${key}/`);
-        if (rest === '/data.json') return json(200, {
-          ...projectView(state), live: projectLive(root, key, state),
-          insights: insightsOf(root, key)
-        });
-        if (rest !== '/') return send(404, 'text/plain; charset=utf-8', `未知路径 ${url}（项目页：/p/<键>/、/p/<键>/data.json）\n`);
-        const name = (projectSummaries(root).find((p) => p.key === key) ?? {}).name ?? key;
-        return send(200, 'text/html; charset=utf-8', projectPageHtml(projectView(state), {
-          name, key, live: projectLive(root, key, state),
-          insights: { experience: projectExperience(root, key), profile: projectProfile(root, key) }
-        }));
+        const from = u.searchParams.get('from') || '';
+        // 没有状态文件不是“错误页”：从画布点过来的人要知道为什么空、下一步做什么、怎么回去。
+        // 这个键在本机有会话就渲染空状态页；一个会话都没有才回 404（页面同样带导航）。
+        if (!fs.existsSync(stateFile(root, key))) {
+          // 取这个项目键下"有哪些会话、叫什么"。默认 store（真机几千本）走 worker 缓存，绝不
+          // 主线程同步 projectsOf（11.7s 会堵死事件循环）；非默认 store（测试/临时夹具，很小）
+          // 直接同步 projectsOf——冷开缓存是空壳，只有它才能准确判出"有会话、只是还没跑收尾"。
+          let members = [];
+          let name = '';
+          if (isDefaultStore(root)) {
+            const cachedProjects = (await refresh.getProjects(root)).payload;
+            members = cachedProjects.membersByKey?.[key] ?? [];
+            name = (cachedProjects.projects ?? []).find((p) => p.key === key)?.name ?? '';
+          } else {
+            try {
+              // 动态 import：主线程静态依赖里不许出现 projectsOf（卡死根因闸门）；
+              // 这里只在非默认 store（测试/临时夹具，体量小）时，按需惰性加载一次。
+              const { projectsOf } = await import('./projects.mjs');
+              const project = projectsOf(root, { withSteps: false }).projects.find((p) => p.key === key) ?? null;
+              members = project?.members ?? [];
+              name = project?.name ?? '';
+            } catch { /* 取不到就按未知项目处理 */ }
+          }
+          const sessions = [...members].sort((a, b) => (b.live ? 1 : 0) - (a.live ? 1 : 0) || String(b.lastAt ?? '').localeCompare(String(a.lastAt ?? '')));
+          if (!sessions.length) return send(404, 'text/html; charset=utf-8', projectEmptyHtml({ key, from, known: false, cli: CLI }));
+          return send(200, 'text/html; charset=utf-8', projectEmptyHtml({
+            key, name, cwd: sessions[0]?.cwd ?? '', sessions, from, cli: CLI,
+          }));
+        }
+        let state;
+        try { state = readState(root, key).state; } catch (e) {
+          return send(200, 'text/html; charset=utf-8', projectEmptyHtml({ key, from, error: String(e?.message ?? e).split('\n')[0], cli: CLI }));
+        }
+        // 四条全库重活（live / 经验 / 画像 / 记忆欠项）全部来自后台 worker 的缓存。
+        const detail = (await refresh.getProjectDetail(root, key)).payload;
+        if (rest === '/data.json') return json(200, { ...projectView(state), ...detail });
+        if (rest !== '/') return send(404, 'text/plain; charset=utf-8', `未知路径 ${url}（项目工作台：/p/<键>/、/p/<键>/data.json）\n`);
+        const name = ((await refresh.getProjects(root)).payload.projects ?? []).find((p) => p.key === key)?.name ?? key;
+        return send(200, 'text/html; charset=utf-8', projectPageHtml(projectView(state), { name, key, ...detail }));
       }
       if (url === '/projects.json') {
         if (method !== 'GET') return send(405, 'text/plain; charset=utf-8', '只支持 GET\n');
-        return json(200, { projects: projectSummaries(root) });
+        const r = await refresh.getProjects(root, { fresh: !!u.searchParams.get('force') });
+        return json(200, { ...r.payload, refreshing: r.refreshing });
       }
 
       // ---- 会话画布：/s/<spec>/... ----
@@ -342,26 +346,27 @@ export async function serveMap(opts = {}) {
           catch (e) { return send(500, 'text/plain; charset=utf-8', '前端文件读不到：' + String(e.message ?? e) + '\n'); }
         }
         if (rest === '/data.json') {
-          await ensureFresh(root, st, rebuildSec);
           try {
-            const v = readView(st.dir);
-            // 页面要能看出画的和源差多远：落后秒数＝源最后写入时刻 − 账本构建时刻（源不比账本新就是 0）。
-            try {
-              const src = v.meta?.sourceFile;
-              const builtMs = Date.parse(v.meta?.builtAt ?? '');
-              if (src) {
-                const srcMs = fs.statSync(src).mtimeMs;
-                v.meta.sourceMtime = new Date(srcMs).toISOString();
-                v.meta.lagSec = Number.isFinite(builtMs) ? Math.max(0, Math.round((srcMs - builtMs) / 1000)) : null;
-              } else v.meta.lagSec = null;
-            } catch { v.meta.lagSec = null; }
-            return send(200, 'application/json; charset=utf-8', JSON.stringify(v));
+            // 先回已算好的视图（readView 命中缓存 0–1ms），重算在后台 worker 里进行。
+            // refreshing 告诉前台「正在更新最新信息」，画布据此转小圈，但不冻结交互。
+            const { payload, refreshing } = refresh.getView(root, st, rebuildSec);
+            payload.meta.refreshing = refreshing;
+            return send(200, 'application/json; charset=utf-8', JSON.stringify(payload));
           }
           catch (e) { return send(500, 'text/plain; charset=utf-8', '这段会话的账本读不到：' + String(e?.message ?? e).split('\n')[0] + '\n'); }
         }
         if (rest === '/sessions.json') {
           if (method !== 'GET') return send(405, 'text/plain; charset=utf-8', '只支持 GET\n');
-          try { return json(200, libraryOf(root, { current: id })); }
+          // 画布内嵌的会话清单：用 worker 快照，只把 current 标记就地改成本段会话。
+          // 原来 libraryOf(root,{current:id}) 在主线程同步扫全库，画布一开就卡住整个 hub。
+          try {
+            const p = (await refresh.getSessions(root)).payload;
+            const groups = (p.groups ?? []).map((g) => ({
+              ...g, sessions: (g.sessions ?? []).map((s) => ({ ...s, current: s.id === id })),
+            }));
+            // 顶层 current 也要标成本段会话（缓存快照本身 current=null）；画布据此认出「本页」。
+            return json(200, { ...p, current: id, groups });
+          }
           catch (e) { return send(500, 'text/plain; charset=utf-8', '会话清单读不到：' + String(e?.message ?? e) + '\n'); }
         }
         if (rest === '/body') {
@@ -400,8 +405,10 @@ export async function serveMap(opts = {}) {
         }
         if (rest === '/health') {
           // 探活只读 ledger/facts 两份 JSON，不走 readView（那要逐段读卡片）：
-          // 它得永远答得快。
-          const l = JSON.parse(fs.readFileSync(path.join(st.dir, 'ledger.json'), 'utf8'));
+          // 它得永远答得快。未建账会话（正在后台建账）也答得快，如实标 building。
+          let l;
+          try { l = JSON.parse(fs.readFileSync(path.join(st.dir, 'ledger.json'), 'utf8')); }
+          catch { return json(200, { ok: true, hub: true, session: id, building: true, segments: 0, archive: archiveState(st.dir), lastError: st.lastError }); }
           let f = {};
           try { f = JSON.parse(fs.readFileSync(path.join(st.dir, 'facts.json'), 'utf8')); } catch { /* 没 facts 就少几格 */ }
           return json(200, {
@@ -412,6 +419,17 @@ export async function serveMap(opts = {}) {
           });
         }
         return send(404, 'text/plain; charset=utf-8', `未知路径 ${url}（会话画布：/s/<id>/、/s/<id>/data.json、/s/<id>/body?seg=S07、/s/<id>/handoff?chapter=N；写：/s/<id>/note、/s/<id>/request）\n`);
+      }
+
+      // 应用壳的样式/脚本带文件版本：改完刷新一次必拿新文件，不吃旧缓存。
+      if (method === 'GET' && url === '/app') {
+        try {
+          const ver = (f) => Math.round(fs.statSync(path.join(WEB, f)).mtimeMs).toString(36);
+          const html = fs.readFileSync(path.join(WEB, 'app.html'), 'utf8')
+            .replace('href="/app.css"', `href="/app.css?v=${ver('app.css')}"`)
+            .replace('src="/app.js"', `src="/app.js?v=${ver('app.js')}"`);
+          return send(200, 'text/html; charset=utf-8', html);
+        } catch (e) { return send(500, 'text/plain; charset=utf-8', '应用壳读不到：' + String(e.message ?? e) + '\n'); }
       }
 
       // ---- 静态资源（固定白名单） ----
@@ -436,25 +454,194 @@ export async function serveMap(opts = {}) {
         catch (e) { return json(400, { ok: false, errors: [String(e?.message ?? e).split('\n')[0]] }); }
       }
 
-      // ---- hub 自身 ----
-      if (url === '/architecture.json') {
-        try { return json(200, roadmapNow(root)); }
+      // ---- 模型后端：在页面里填一个 API key 就接上（key 只存本机，回执一律脱敏） ----
+      // 钥匙串：贴过的 key 记在 llm.json 的 savedKeys 里，页面上永远只见脱敏值；
+      // 换端不用重贴，点列表里的「用」就切过去（2026-11-14 用户要求）。
+      const llmView = () => {
+        ensureActiveSaved(root);   // 老配置 / 环境变量接的 key 也收进串里，口径统一
+        const c = readLlm(root);
+        return {
+          configured: c.configured,
+          baseURL: c.baseURL ?? null,
+          model: c.model ?? null,
+          provider: c.provider ?? null,
+          enabled: c.enabled !== false,
+          autoOn: llmOn(root),
+          models: Array.isArray(c.models) ? c.models.slice(0, 60) : [],
+          keyMasked: c.apiKey ? maskKey(c.apiKey) : null,
+          savedKeys: listSavedKeys(root),
+          source: c.source,
+          updatedAt: c.updatedAt ?? null,
+        };
+      };
+      if (url === '/llm.json') {
+        if (method !== 'GET') return send(405, 'text/plain; charset=utf-8', '只支持 GET\n');
+        return json(200, llmView());
+      }
+      if (url === '/llm') {
+        if (method !== 'POST') return send(405, 'text/plain; charset=utf-8', '只支持 POST\n');
+        if (!ORIGIN_OK(req.headers.origin, port0)) return send(403, 'text/plain; charset=utf-8', '只接受本页写\n');
+        if (!/^application\/json\b/i.test(String(req.headers['content-type'] || ''))) return send(415, 'text/plain; charset=utf-8', '要 application/json\n');
+        let body;
+        try { body = JSON.parse(await readBody(req)); }
+        catch (e) { return send(400, 'text/plain; charset=utf-8', '请求体不是 JSON：' + String(e.message ?? e) + '\n'); }
+        if (body?.clear) { clearLlm(root); return json(200, { ok: true, config: llmView() }); }
+        if (typeof body?.enabled === 'boolean' && !body?.apiKey && !body?.bridge && !body?.baseURL) {
+          // 只翻开关：没接模型时开开关没有意义，明确拒绝。
+          if (body.enabled && !readLlm(root).configured) {
+            return json(400, { ok: false, errors: ['还没接模型——先填 key 再开这个开关'] });
+          }
+          setEnabled(root, body.enabled);
+          return json(200, { ok: true, config: llmView() });
+        }
+        const key = typeof body?.apiKey === 'string' ? body.apiKey.trim() : '';
+        const base = typeof body?.baseURL === 'string' ? body.baseURL.trim().replace(/\/$/, '') : '';
+        const model = typeof body?.model === 'string' ? body.model.trim() : '';
+        try {
+          let picked = null;
+          if (body?.bridge && !key) {
+            const b = await detectBridge();
+            if (!b.ok) return json(400, { ok: false, errors: [`OW Bridge 没接上：${b.reason}`] });
+            picked = { baseURL: b.baseURL, apiKey: b.apiKey, models: b.models, provider: 'ow-bridge', label: b.label };
+          } else if (!key) {
+            return json(400, { ok: false, errors: ['要给一个 API key（或用「读本机 OW Bridge」）'] });
+          } else if (base) {
+            const p = await probeEndpoints(key, { endpoints: [{ id: 'custom', label: base, baseURL: base }] });
+            if (!p.hit) return json(400, { ok: false, errors: [`${base} 没通过：${p.tried[0]?.reason ?? '未知原因'}`] });
+            picked = { baseURL: base, apiKey: key, models: p.hit.models, provider: 'custom', label: base };
+          } else {
+            const p = await probeEndpoints(key);
+            if (!p.hit) {
+              return json(400, {
+                ok: false,
+                errors: ['没有一个候选端点认这个 key'],
+                tried: p.tried.map((t) => ({ label: t.label, reason: t.reason ?? '不通' })),
+              });
+            }
+            picked = { baseURL: p.hit.baseURL, apiKey: key, models: p.hit.models, provider: p.hit.id, label: p.hit.label };
+          }
+          const useModel = model || pickModel(picked.models);
+          if (!useModel) return json(400, { ok: false, errors: ['这个端点没返回任何模型，请手动填一个模型名'] });
+          writeLlm(root, { ...picked, model: useModel });
+          // 接上的 key 顺手收进钥匙串：下次换回来不用重贴
+          saveKeyEntry(root, { apiKey: picked.apiKey, baseURL: picked.baseURL, provider: picked.provider, label: picked.label, model: useModel, models: picked.models });
+          return json(200, { ok: true, config: llmView() });
+        } catch (e) {
+          return json(400, { ok: false, errors: [String(e?.message ?? e).split('\n')[0]] });
+        }
+      }
+      if (url === '/llm/test') {
+        if (method !== 'POST') return send(405, 'text/plain; charset=utf-8', '只支持 POST\n');
+        if (!ORIGIN_OK(req.headers.origin, port0)) return send(403, 'text/plain; charset=utf-8', '只接受本页写\n');
+        const cfg = readLlm(root);
+        if (!cfg.configured) return json(400, { ok: false, errors: ['还没接模型'] });
+        try {
+          const r = await testLlm(cfg);
+          return json(200, { ok: true, ms: r.ms, reply: r.reply, usage: r.usage, model: cfg.model });
+        } catch (e) {
+          return json(400, { ok: false, errors: [String(e?.message ?? e).split('\n')[0]] });
+        }
+      }
+      // ---- 钥匙串操作：切到某条贴过的 key / 删一条（明文永远不出本机、不回页面） ----
+      if (url === '/llm/keys') {
+        if (method !== 'POST') return send(405, 'text/plain; charset=utf-8', '只支持 POST\n');
+        if (!ORIGIN_OK(req.headers.origin, port0)) return send(403, 'text/plain; charset=utf-8', '只接受本页写\n');
+        if (!/^application\/json\b/i.test(String(req.headers['content-type'] || ''))) return send(415, 'text/plain; charset=utf-8', '要 application/json\n');
+        let body;
+        try { body = JSON.parse(await readBody(req)); }
+        catch (e) { return send(400, 'text/plain; charset=utf-8', '请求体不是 JSON：' + String(e.message ?? e) + '\n'); }
+        const action = String(body?.action || '');
+        const id = String(body?.id || '').trim();
+        try {
+          if (action === 'use') {
+            const c = useSavedKey(root, id);
+            return json(200, { ok: true, config: llmView(), note: `已切到 ${c.model ?? '（未选模型）'}（${c.baseURL}）` });
+          }
+          if (action === 'remove') {
+            removeSavedKey(root, id);
+            return json(200, { ok: true, config: llmView() });
+          }
+          return json(400, { ok: false, errors: [`未知操作：${action}（只认 use / remove）`] });
+        } catch (e) {
+          return json(400, { ok: false, errors: [String(e?.message ?? e).split('\n')[0]] });
+        }
+      }
+
+      // ---- 状态看板：只读快照 + 一键接入 ----
+      if (url === '/status.json') {
+        if (method !== 'GET') return send(405, 'text/plain; charset=utf-8', '只支持 GET\n');
+        try {
+          const fresh = !!u.searchParams.get('force');
+          if (fresh) refresh.invalidateApp();
+          const { payload, refreshing } = await refresh.getStatus(root, { fresh });
+          return json(200, { ...payload, refreshing });
+        }
         catch (e) { return json(500, { ok: false, error: String(e?.message ?? e).split('\n')[0] }); }
       }
-      if (url === '/health') {
-        // 只数目录，不读账本：hub 探活要永远答得快（libraryOf 会逐个读标题）。
-        let sessions = null;
-        try { sessions = fs.readdirSync(root).filter((d) => fs.existsSync(path.join(root, d, 'ledger.json'))).length; } catch { /* store 还没建 */ }
-        return json(200, { ok: true, hub: true, port: port0, pid: process.pid, startedAt, rebuildSec, sessions });
+      // 用量看板：宿主日志的 token/credits 统计。首次要读几百 MB 宿主日志，
+      // 一律走后台 worker；主线程即时回缓存并标 refreshing，绝不因统计停摆（PRD-usage §3.5）。
+      if (url === '/usage.json') {
+        if (method !== 'GET') return send(405, 'text/plain; charset=utf-8', '只支持 GET\n');
+        try {
+          const fresh = !!u.searchParams.get('force');
+          const { payload, refreshing } = await refresh.getUsage(root, { fresh });
+          return json(200, { ...payload, refreshing });
+        } catch (e) {
+          return json(500, { ok: false, error: String(e?.message ?? e).split('\n')[0] });
+        }
+      }
+      if (url === '/status/action') {
+        if (method !== 'POST') return send(405, 'text/plain; charset=utf-8', '只支持 POST\n');
+        if (!ORIGIN_OK(req.headers.origin, port0)) return send(403, 'text/plain; charset=utf-8', '只接受本页写\n');
+        if (!/^application\/json\b/i.test(String(req.headers['content-type'] || ''))) return send(415, 'text/plain; charset=utf-8', '要 application/json\n');
+        let body;
+        try { body = JSON.parse(await readBody(req)); }
+        catch (e) { return send(400, 'text/plain; charset=utf-8', '请求体不是 JSON：' + String(e.message ?? e) + '\n'); }
+        const client = String(body?.client || '');
+        const action = String(body?.action || '');
+        const OK_CLIENTS = ['qoder', 'claude-code', 'workbuddy', 'opencode', 'codex'];
+        if (!OK_CLIENTS.includes(client)) return json(400, { ok: false, error: `未知 agent：${client}` });
+        if (!['hooks', 'skill', 'connect', 'disconnect'].includes(action)) return json(400, { ok: false, error: `未知操作：${action}` });
+        try {
+          const r = runIntegration(client, action, { root });
+          refresh.invalidateApp();   // 让下一次轮询在后台重算，立刻看到新状态
+          return json(200, r);
+        } catch (e) {
+          return json(500, { ok: false, error: String(e?.message ?? e).split('\n')[0] });
+        }
+      }
+      // 全局暂停：写暂停标记（之后 setup/upgrade/宿主事件都不自动起 hub），回完响应就停掉本进程、
+      // 释放后台内存。恢复：双击桌面「convledger 地图」或跑 convledger map（会先删标记再起）。
+      if (url === '/hub/pause') {
+        if (method !== 'POST') return send(405, 'text/plain; charset=utf-8', '只支持 POST\n');
+        if (!ORIGIN_OK(req.headers.origin, port0)) return send(403, 'text/plain; charset=utf-8', '只接受本页写\n');
+        const marker = path.resolve(root, '..', 'HUB-PAUSED');
+        try {
+          fs.mkdirSync(path.dirname(marker), { recursive: true });
+          fs.writeFileSync(marker, JSON.stringify({ at: new Date().toISOString(), by: 'app', port: port0 }, null, 1));
+        } catch { /* 写不了标记也照样停，至少这次停住 */ }
+        json(200, { ok: true, paused: true, note: '常驻服务即将停止；双击桌面「convledger 地图」或跑 convledger map 恢复' });
+        try { refresh.stop(); } catch { /* 已停 */ }
+        setTimeout(() => process.exit(0), 200);
+        return;
       }
       if (url === '/sessions.json') {
         if (method !== 'GET') return send(405, 'text/plain; charset=utf-8', '只支持 GET\n');
-        try { return json(200, libraryOf(root, { current: null })); }
+        try {
+          const fresh = !!u.searchParams.get('force');
+          if (fresh) refresh.invalidateApp();
+          const { payload, refreshing } = await refresh.getSessions(root, { fresh });
+          return json(200, { ...payload, refreshing });
+        }
         catch (e) { return send(500, 'text/plain; charset=utf-8', '会话清单读不到：' + String(e?.message ?? e) + '\n'); }
       }
+      // 旧书签：状态页并入应用看板，别再维护第二份。
+      if (url === '/status') return redirect('/app');
+      // 用量看板是 App 壳的第六个视图；单独地址只做跳转，不维护第二份页面。
+      if (url === '/usage') return redirect('/app?view=usage');
       // 旧书签：403/404 都不该出现在「我打开过这张图」的地址上。
       if (url === '/atlas') {
-        const id = newestSession(root);
+        const id = await newestSession(root, refresh);
         return redirect(id ? `/s/${id}/` : '/');
       }
       if (url === '/open') {
@@ -482,8 +669,8 @@ export async function serveMap(opts = {}) {
   }
 
   if (pidFile) {
-    try { fs.writeFileSync(pidFile, JSON.stringify({ pid: process.pid, port: port0, startedAt })); }
-    catch { /* pid 文件写不了不影响服务 */ }
+    try { fs.writeFileSync(pidFile, JSON.stringify({ pid: process.pid, port: port0, startedAt, token: hubToken })); }
+    catch { /* 写不出来＝启动方拿不到 token＝谁都进不来；窗口会显示 403 页的指引 */ }
   }
   server.on('close', () => {
     if (!pidFile) return;
@@ -493,9 +680,19 @@ export async function serveMap(opts = {}) {
     } catch { /* 文件已经不在 */ }
   });
 
+  // 人走灯灭：10 分钟零请求就退（窗口关了／没人开）。清掉 pid 文件再走，别留僵尸记录。
+  const idleTimer = setInterval(() => {
+    if (Date.now() - lastSeen < 10 * 60 * 1000) return;
+    try { if (pidFile) fs.rmSync(pidFile, { force: true }); } catch { /* 没有就算了 */ }
+    try { refresh.stop(); } catch { /* 已停 */ }
+    try { server.close(); server.closeAllConnections?.(); } catch { /* 已关 */ }
+    setTimeout(() => process.exit(0), 1500).unref();
+  }, 60 * 1000);
+  idleTimer.unref();
+
   return {
     server, hub: true, port: port0, startedAt, dir: null, view: null, lastError: null,
-    archive: null, reused: false,
-    stop: () => { server.close(); server.closeAllConnections?.(); },
+    archive: null, reused: false, token: hubToken,
+    stop: () => { refresh.stop(); server.close(); server.closeAllConnections?.(); },
   };
 }

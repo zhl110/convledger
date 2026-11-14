@@ -3,7 +3,7 @@
 // M2 layer) survives a rebuild and is only invalidated by an anchor hash change.
 import fs from 'node:fs';
 import path from 'node:path';
-import { project } from './project.mjs';
+import { project, normalizeRecords } from './project.mjs';
 import { segment, RULES } from './segment.mjs';
 import { buildFacts } from './facts.mjs';
 import { deriveClaim, renderCard, renderIndex } from './cards.mjs';
@@ -12,16 +12,35 @@ import { sha, readJsonl, tok } from './lib.mjs';
 export const RULE_AUTHOR = 'rule-layer(M1)';
 
 export function build(mainFile, opts = {}) {
-  const p = project(mainFile);
+  // opts.slice 由 src/window.mjs 递进来：只解析一片，段 id 用全文件绝对行号保持逐片追加稳定。
+  // 不给 slice 就是原来的整段全量路径（显式 index / 重建旧账本）。
+  const slice = opts.slice ?? null;
+  const p = project(mainFile, slice ? {
+    records: normalizeRecords(slice.runner, slice.metaRecords),
+    turnRecords: normalizeRecords(slice.runner, slice.records),
+    adapterId: slice.runner,
+    lineText: slice.lineText,
+    lineOffset: slice.lineOffset,
+    windowInfo: slice.info,
+    skipBranches: true,
+  } : {});
   const sessionId = path.basename(mainFile, '.jsonl');
   const segs = segment(p.turns, p.branches);
 
-  const lines = fs.readFileSync(mainFile, 'utf8').split('\n');
+  const lines = p.lineText ?? fs.readFileSync(mainFile, 'utf8').split('\n');
+  const lineOffset = p.lineOffset ?? 0;
   for (const s of segs) {
-    s.contentHash = sha(lines.slice(s.lineFrom - 1, s.lineTo).join('\n'));
+    if (slice) s.id = 'S' + String(s.lineFrom).padStart(6, '0');
+    s.contentHash = sha(lines.slice(s.lineFrom - 1 - lineOffset, s.lineTo - lineOffset).join('\n'));
   }
 
-  const facts = buildFacts(p, segs);
+  const facts = buildFacts(p, segs, slice ? { rawRecords: p.factsRaw } : {});
+  if (slice) {
+    // facts 的逐记录统计只覆盖这一片；源规模要报全文件，别让看板显示成 256KB。
+    facts.session.bytes = slice.info.totalBytes;
+    facts.session.lines = slice.info.endLine;
+    facts.session.records = slice.info.endLine;
+  }
 
   const claims = {};  for (const s of segs) {
     const d = deriveClaim(s);
@@ -39,7 +58,8 @@ export function build(mainFile, opts = {}) {
     sourceFile: p.mainFile,
     sidecarDir: p.sidecarDir,
     sourceBytes: facts.session.bytes,
-    sourceRecords: p.records,
+    sourceRecords: slice ? slice.info.endLine : p.records,
+    ...(slice ? { window: { mode: 'slice', ...slice.info } } : {}),
     builtAt: new Date().toISOString(),
     cwd: facts.session.cwd,
     boundaries: p.boundaries,

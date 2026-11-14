@@ -6,14 +6,18 @@ import path from 'node:path';
 import os from 'node:os';
 import { readJsonl, blocksOf, argLine, pathsTouched, pathsNamedIn, codeRefsIn, toolOpOf, resultText } from './lib.mjs';
 import { OPENCODE_ROOT, syncOpencodeProjections } from './opencode.mjs';
+import { codexRoot, syncCodexProjections } from './codex.mjs';
 
 const home = os.homedir().replace(/\\/g, '/');
+/** 配置目录可被环境变量改写：测试夹具靠它隔离真机，用户也可能把宿主装到别处。
+ *  惰性读，别在模块加载时定死。 */
+const runnerHome = (envKey, dir) => (process.env[envKey] || `${home}/${dir}`).replace(/\\/g, '/');
 
 /** Probe a file's first records and pick the runner that recognises them. */
 const qoder = {
   id: 'qoder',
-  roots: [`${home}/.qoder/projects`],
-  detect: (rec) => rec.some((r) => r.opencode !== true && (r.type === 'runtime-config' || r.type === 'active-leaf' || r.type === 'workspace-directories' || r.humanInput !== undefined)),
+  get roots() { return [`${runnerHome('QODER_CONFIG_DIR', '.qoder')}/projects`]; },
+  detect: (rec) => rec.some((r) => r.opencode !== true && r.codex !== true && (r.type === 'runtime-config' || r.type === 'active-leaf' || r.type === 'workspace-directories' || r.humanInput !== undefined)),
   /** Qoder keeps children in <sessionDir>/subagents/<name>.jsonl + a .meta.json carrying the explicit toolUseId. */
   branches(dir, mainTurns) {
     const subDir = path.join(dir, 'subagents');
@@ -55,7 +59,7 @@ const qoder = {
 
 const claudeCode = {
   id: 'claude-code',
-  roots: [`${home}/.claude/projects`],
+  get roots() { return [`${runnerHome('CLAUDE_CONFIG_DIR', '.claude')}/projects`]; },
   detect: (rec) => rec.some((r) => r.type === 'queue-operation' || r.userType !== undefined || r.entrypoint !== undefined),
   /** Claude Code writes children inline in the parent's JSONL, flagged isSidechain, with no call id link. */
   branches(dir, turns) {
@@ -88,7 +92,7 @@ const claudeCode = {
  */
 const workbuddy = {
   id: 'workbuddy',
-  roots: [`${home}/.workbuddy/projects`],
+  get roots() { return [`${runnerHome('WORKBUDDY_CONFIG_DIR', '.workbuddy')}/projects`]; },
   detect: (rec) => rec.some((r) => r.type === 'session-meta' || r.type === 'function_call' || r.type === 'function_call_result' || r.type === 'ai-title' || r.type === 'resend-fork-notice'),
   // no sidechain markers anywhere in the corpus (0 hits for isSidechain/agentId, no Task/Agent tool)
   branches: () => [],
@@ -182,7 +186,27 @@ const opencode = {
   },
 };
 
-export const ADAPTERS = [opencode, qoder, claudeCode, workbuddy];
+/** 第五个来源：Codex 的 rollout（深层嵌套 + 信封记录）先投影成 out/codex/<sid>/<sid>.jsonl（见 codex.mjs），
+ *  这里只负责认它、并把压缩点认成边界。投影行已是规范形状，normalize 原样返回。 */
+const codex = {
+  id: 'codex',
+  get roots() { return [codexRoot()]; },
+  detect: (rec) => rec.some((r) => r.codex === true),
+  normalize: (recs) => recs,
+  boundaries(recs) {
+    return recs.filter((r) => r.type === 'user' && r.isCompactSummary)
+      .map((r) => ({ line: r.__line, uuid: r.uuid ?? null, trigger: 'compact', preTokens: null, postTokens: null, messagesSummary: null, durationMs: null, raw: null }));
+  },
+};
+
+export const ADAPTERS = [opencode, qoder, claudeCode, workbuddy, codex];
+
+/** 所有 runner 的会话根，单一事实源。hook 的 transcript_path 白名单、按 sid 找源
+ *  都走这里——曾经 hook 自己只列了 Qoder/WorkBuddy 两个根，结果 Claude Code 的会话
+ *  在真机上一直判 no-source、只能借别人的账本。新增 runner 只改 ADAPTERS。 */
+export function sourceRoots(adapters = ADAPTERS) {
+  return [...new Set(adapters.flatMap((a) => a.roots))].map((r) => r.replace(/\\/g, '/'));
+}
 
 export function detectAdapter(records) {
   const sample = records.slice(0, 40);
@@ -202,6 +226,10 @@ export function listSessions(adapters = ADAPTERS) {
   // 失败只影响这一个来源（缺库、老 Node），其他 runner 照常。
   if (adapters.some((a) => a.id === 'opencode')) {
     try { syncOpencodeProjections(); } catch { /* 由 opencode 模块自己记错 */ }
+  }
+  // Codex 的 rollout 深层嵌套且是信封格式：列会话前先投影成 out/codex/<sid>/<sid>.jsonl。
+  if (adapters.some((a) => a.id === 'codex')) {
+    try { syncCodexProjections(); } catch { /* 由 codex 模块自己记错 */ }
   }
   const out = [];
   // The runner is whatever adapter owns the directory, so a third runner is one
@@ -227,22 +255,36 @@ export function listSessions(adapters = ADAPTERS) {
   return out.sort((a, b) => b.mtime.localeCompare(a.mtime));
 }
 
+// 廉价源枚举的缓存：listSessions 要 readdir＋stat 所有宿主目录（IO，不是建账 CPU）。
+// 会话库列未建账会话、findSession 认未导入 id、打开未建账会话取源文件，都共用这一份，
+// 15 秒内不重扫。机器上对话再多，也只是每 15 秒一遍 stat，绝不挨个 build。
+let SRC_INDEX = { at: 0, list: null, byId: null };
+export function sourceIndex({ now = Date.now(), ttl = 15000 } = {}) {
+  if (SRC_INDEX.list && now - SRC_INDEX.at < ttl) return SRC_INDEX;
+  const list = listSessions();
+  SRC_INDEX = { at: now, list, byId: new Map(list.map((s) => [s.sessionId, s])) };
+  return SRC_INDEX;
+}
+
 /**
  * Project one runner session file into turns + branches + boundary events.
  * Turn numbering follows "one user-type record opens a turn", which is what
  * the experiments measured against; `zeroContent` marks the records that carry
  * nothing (35% of them in the calibration session).
  */
-export function project(mainFile) {
-  const raw = readJsonl(mainFile);
-  const adapter = detectAdapter(raw);
-  const records = adapter?.normalize ? adapter.normalize(raw) : raw;
+export function project(mainFile, opts = {}) {
+  // 按片建账（src/window.mjs）会直接把已 normalize 的一片记录递进来：此时不再 readJsonl
+  // 整份源，turns 也只从片内构造。opts 为空＝原来的全量路径，逐字不变。
+  const raw = opts.records ?? readJsonl(mainFile);
+  const adapter = opts.adapterId ? ADAPTERS.find((a) => a.id === opts.adapterId) : detectAdapter(raw);
+  const records = opts.records ? raw : (adapter?.normalize ? adapter.normalize(raw) : raw);
+  const stream = opts.turnRecords ?? records;
   const dir = path.join(path.dirname(mainFile), path.basename(mainFile, '.jsonl'));
 
   // tool_use -> tool_result pairing over the whole file (results often land outside the turn that called)
   const calls = new Map();
   const results = new Map();
-  for (const r of records) {
+  for (const r of stream) {
     for (const b of blocksOf(r)) {
       if (b?.type === 'tool_use') calls.set(b.id, { name: b.name, input: b.input ?? {}, line: r.__line, uuid: r.uuid });
       else if (b?.type === 'tool_result') {
@@ -259,7 +301,7 @@ export function project(mainFile) {
   const turns = [];
   const boundaries = [];
   let open = null;
-  for (const r of records) {
+  for (const r of stream) {
     if (r.type === 'system' && (r.subtype === 'compact_boundary' || r.compactMetadata)) {
       boundaries.push({
         line: r.__line, uuid: r.uuid ?? null,
@@ -316,15 +358,21 @@ export function project(mainFile) {
   }
   // a runner that records compaction as a message (WorkBuddy) contributes its own
   // events; the system-record path above stays the only one for Qoder/Claude.
-  boundaries.push(...(adapter?.boundaries?.(records) ?? []));
+  boundaries.push(...(adapter?.boundaries?.(stream) ?? []));
   boundaries.sort((a, b) => a.line - b.line);
-  const branches = adapter?.branches ? adapter.branches(dir, turns) : [];
+  // 片模式下跳过 sidecar 递归（长会话的分支目录可能很大），旧账本已有的 branches 由
+  // window.mjs 的合并保留；新接入一片本来也不该去翻整段历史的子代理记录。
+  const branches = opts.skipBranches ? [] : (adapter?.branches ? adapter.branches(dir, turns) : []);
   return {
     runner: adapter?.id ?? 'unknown',
     adapterId: adapter?.id ?? null,
     mainFile: mainFile.replace(/\\/g, '/'), sidecarDir: dir.replace(/\\/g, '/'),
     records: records.length, lines: records.length,
     boundaries, branches, turns,
+    ...(opts.records ? {
+      factsRaw: records,
+      lineText: opts.lineText, lineOffset: opts.lineOffset, windowInfo: opts.windowInfo,
+    } : {}),
   };
 }
 

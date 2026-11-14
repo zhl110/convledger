@@ -9,7 +9,7 @@ import { build } from '../src/build.mjs';
 import { readView } from '../src/view.mjs';
 import { storeDir } from '../src/store.mjs';
 
-const CALIBRATION = '~/.qoder/projects/D--mycode-conversation-graph-research/demo0001-838b-4697-95fc-9756c7ce93eb.jsonl';
+const CALIBRATION = '~/.qoder/projects/D--convledger/demo0001-838b-4697-95fc-9756c7ce93eb.jsonl';
 const FILE = (process.argv[2] || CALIBRATION).replace(/\\/g, '/');
 const here = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(here, '..', 'out', 'store');

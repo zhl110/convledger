@@ -92,11 +92,13 @@ export function writeStore(root, built) {
   fs.mkdirSync(path.join(dir, 'segments'), { recursive: true });
   // 归档路径由存储层说了算，建账参数里给的不算——否则 --store 一换，ledger 会指向别处
   built.ledger.archiveFile = archPath(dir);
-  fs.writeFileSync(path.join(dir, 'ledger.json'), JSON.stringify(built.ledger, null, 1));
+  // ledger.json 是「这本账已就绪」的标志，**必须最后写**。先写它会让并发读者看到就绪、
+  // 却去读还没落盘的 segments/*.md，偶发 ENOENT（worker 建账与主线程读同时发生时）。
   fs.writeFileSync(path.join(dir, 'facts.json'), JSON.stringify(built.facts, null, 1));
   fs.writeFileSync(path.join(dir, 'claims.json'), JSON.stringify(built.claims, null, 1));
   fs.writeFileSync(path.join(dir, 'index.md'), built.indexMd);
   for (const [id, card] of Object.entries(built.cards)) fs.writeFileSync(path.join(dir, 'segments', `${id}.md`), card);
+  fs.writeFileSync(path.join(dir, 'ledger.json'), JSON.stringify(built.ledger, null, 1));
   return dir;
 }
 
@@ -134,17 +136,30 @@ export function resolveSegments(ledger, spec) {
   return out;
 }
 
+/** 批量校验锚点：源只读一次、按行切一次，之后每段只做小区间的哈希。
+ *  单段 checkAnchor 每次都重读整份源，全量校验会变成 O(段数 × 文件大小)；
+ *  大账本（230MB / 700+ 段）实测一条测试要十分钟，这里把读文件的部分摊成一次。 */
+export function anchorChecker(ledger, source) {
+  const ef = source ?? effectiveSource(ledger);
+  let lines = null;
+  const missing = !ef.file || !fs.existsSync(ef.file);
+  if (!missing) {
+    try { lines = fs.readFileSync(ef.file, 'utf8').split('\n'); } catch { lines = null; }
+  }
+  return (seg) => {
+    if (missing || !lines) return { ok: false, missing: true, now: null, recorded: seg.contentHash, bytes: 0, archived: false };
+    const slice = lines.slice(seg.lineFrom - 1, seg.lineTo).join('\n');
+    const now = sha(slice);
+    return { ok: now === seg.contentHash, now, recorded: seg.contentHash, bytes: Buffer.byteLength(slice), archived: !!ef.archived };
+  };
+}
+
 /** Anchor = source line range. Verify the range still holds the bytes it held
  *  when the ledger was built; a deleted or rewritten log must say so loudly
  *  instead of quietly returning the wrong thing. 源不在了就对归档做同样的校验，
  *  返回值带 archived，调用方必须把它说出来。 */
 export function checkAnchor(ledger, seg, source) {
-  const ef = source ?? effectiveSource(ledger);
-  if (!ef.file || !fs.existsSync(ef.file)) return { ok: false, missing: true, now: null, recorded: seg.contentHash, bytes: 0, archived: false };
-  const lines = fs.readFileSync(ef.file, 'utf8').split('\n');
-  const slice = lines.slice(seg.lineFrom - 1, seg.lineTo).join('\n');
-  const now = sha(slice);
-  return { ok: now === seg.contentHash, now, recorded: seg.contentHash, bytes: Buffer.byteLength(slice), archived: !!ef.archived };
+  return anchorChecker(ledger, source)(seg);
 }
 
 /**
@@ -172,11 +187,12 @@ export function renderBody(ledger, segs, opts = {}) {
   const out = [];
   const warnings = [];
   if (ef.archived) warnings.push(`⚠ 源日志已不在（${ledger.sourceFile}），以下正文读自账本归档 ${ef.archivedAt ? `（同步于 ${ef.archivedAt}）` : ''}——归档是源的最后一次逐字镜像，不是新的真相。`);
+  const verify = anchorChecker(ledger, ef);
   let used = 0;
   let stopped = null;
   const emit = (s) => { out.push(s); used += tok(s); };
   for (const seg of segs) {
-    const a = checkAnchor(ledger, seg, ef);
+    const a = verify(seg);
     if (!a.ok) warnings.push(`⚠ 锚点已断 ${seg.id} ${seg.anchor}：${a.missing ? '源与归档都读不到' : `${ef.archived ? '归档' : '源文件'}这段内容变了`}（recorded ${a.recorded} → now ${a.now}）。回答需标注来源已失效。`);
     emit(`\n===== ${seg.id} ${seg.anchor} | ${seg.kind} | turn ${seg.turnFrom}${seg.turnFrom === seg.turnTo ? '' : `-${seg.turnTo}`} | ${seg.toolCalls} 次工具调用 =====`);
     for (let line = Math.max(seg.lineFrom, after + 1); line <= seg.lineTo; line++) {

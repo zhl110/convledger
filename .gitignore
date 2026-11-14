@@ -32,3 +32,11 @@ Thumbs.db
 # 实验派生输出（逐次运行可重建；本机保留在 reference/experiments-out/）
 experiments/*/out/
 tool/test/routing-gate.json
+
+# Codex 项目级钩子由安装器按本机路径生成，不入库
+.codex/
+tool/hooks/codex-hook.cmd
+
+# 依赖目录（全局/本地依赖都不入库）
+node_modules/
+.workbuddy/

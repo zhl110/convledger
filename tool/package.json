@@ -21,6 +21,5 @@
   },
   "scripts": {
     "selftest": "node test/selftest.mjs"
-  },
-  "dependencies": {}
+  }
 }

@@ -48,7 +48,11 @@ export const kindLabel = (kind) => {
 // a map of 48 segments read like a shell history. Name it instead by what it changed:
 // the file it wrote routes the reader, the command line that wrote it does not.
 export const TOOLISH = /^(Bash|Read|Write|Edit|MultiEdit|NotebookEdit|Grep|Glob|Agent|WebFetch|WebSearch|TodoWrite|TaskCreate|TaskUpdate|TaskStop|TaskList|SearchWorkspace|SearchKnowledge|ImageGen|ImageSearch|Skill|VideoGen|present_visualization|mcp_+(list|get|call)?|convledger)/;
-export const NOSAY = /^（(无回复文本|本段无文本产出)/;
+// 「不是人说的话」同一把筛子：没有回复文本、以及 hook 自己注入的上下文。
+// 注入文本（[convledger · 收尾检查] …）在宿主日志里也是 user 记录，不过滤的话会被当成
+// 「这块里第一句人话」，块名就变成 `[convledger · 收尾检查] 这个项目还没有任务表`——
+// 压缩后注入回新上下文，新上下文会把这句提示误当成用户当前在做的事（真机踩过）。
+export const NOSAY = /^(（(无回复文本|本段无文本产出)|\[convledger)/;
 
 const fileNames = (list) => [...new Set((list ?? [])
   .map((p) => String(p).split(/[\\/]/).filter(Boolean).pop() ?? '')
@@ -403,13 +407,16 @@ export function stepsOf(nodes, asks, tasks, frames, { splitFrom = Infinity } = {
       || clip(s.topic, CLAIM_MARK_W, true)
       || nameCell(s.outs[0])
       || (s.wrote ? `写 ${s.wrote} 件` : '') || (s.compacts ? '压缩' : '—');
-    // 中景标题：有模型综述就用综述；没有就按这一块的动作派生（写了什么/有没有产物），
-    // 绝不把用户原话剪一段当标题（2026-11-09 用户：每一块都该有总结，不是复读）。
-    const derived = s.outs.length
-      ? `写 ${s.outs[0]}${s.wrote > s.outs.length ? ` 等 ${s.wrote} 件` : ''}`
-      : s.wrote ? `写 ${s.wrote} 件`
-        : s.verified ? '只有已证增量，没有产物'
-          : s.say ? '讨论过，没有落产物' : '（这块内没有真人提问）';
+    // 中景标题：有模型综述就用综述（下面 loop 里覆盖成 e.title）。没写综述时，直接显示这一块的
+    // 对话截断（用户真人原话的截断），不留空（2026-11-13 用户口径：没补账就放之前的聊天记录
+    // 截断，像以前那样）。「待补」的标注由画布层另加，标题这里不用占位词。没有真人原话才按产物派生。
+    const derived = (s.say && String(s.say).trim())
+      ? s.say
+      : s.outs.length
+        ? `写 ${s.outs[0]}${s.wrote > s.outs.length ? ` 等 ${s.wrote} 件` : ''}`
+        : s.wrote ? `写 ${s.wrote} 件`
+          : s.verified ? '只有已证增量，没有产物'
+            : s.compacts ? '（这块内是压缩事件）' : '（这块内没有真人提问）';
     s.gist = clip(derived, BLOCK_GIST_W, true);
     s.gistIsAsk = false;
     s.gistFrom = '';
@@ -630,6 +637,8 @@ export function readView(storeDir) {
     s.mark = e.short;
     sumStat.blocks++;
   }
+  // 没写综述的块单独标出来：页面要能说「这些还在等补账」，而不是让用户猜是不是卡住了。
+  for (const s of stepLayer.steps) s.pending = !s.sum;
   for (const t of tasks) {
     const e = sums.tasks[t.id];
     if (!e || e.head !== t.head) continue;
@@ -669,7 +678,7 @@ export function readView(storeDir) {
     meta: {
       session: ledger.sessionId, sourceFile: ledger.sourceFile, runner: ledger.runner,
       cwd: ledger.cwd || '',
-      // 画布上「项目任务页」的入口：同一把项目键尺，和 /projects.json 用的一致。
+      // 画布上「项目工作台」的入口：同一把项目键尺，和 /projects.json 用的一致。
       projectKey: ledger.cwd ? projectKey(ledger.cwd) : null,
       // 画布的身份标注：这段会话是谁、在哪、什么时候开的——不是装饰，是把「我在看哪段」钉死
       models: facts.session?.models ?? [],

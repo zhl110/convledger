@@ -1,8 +1,11 @@
-// export — 把记忆层写成项目里能直接读、能认出「谁/何时/哪个项目」的文件：
-//   <项目>/convledger-export/PROGRESS.md        稳定入口：现在到哪 + 阶段 + 四类记忆 + 最近会话
-//   <项目>/convledger-export/USER-PROFILE.md    用户画像（跨项目快照）+ 晋升来的规则
-//   <项目>/convledger-export/INDEX.md           本项目现存快照清单
-//   <项目>/convledger-export/archive/<时间>_<类型>_<agent>_<会话>[_s<步>].md
+// export — 把记忆层写成能直接读、能认出「谁/何时/哪个项目」的文件。
+// 统一收在工具自己的目录里，不再往每个项目工作目录塞一份：
+//   tool/out/exports/projects/<项目名>--<项目键>/PROGRESS.md
+//   tool/out/exports/projects/<项目名>--<项目键>/USER-PROFILE.md
+//   tool/out/exports/projects/<项目名>--<项目键>/INDEX.md
+//   tool/out/exports/projects/<项目名>--<项目键>/archive/<时间>_<类型>_<agent>_<会话>[_s<步>].md
+//   tool/out/exports/INDEX.md  跨项目总索引
+// 旧位置 <项目>/convledger-export/ 会被下一次导出自动复制过来（不删旧目录；显式 --migrate-legacy 才搬走）。
 //
 // 零模型调用：全部由账本 + 记忆表现算，和 `convledger memory` 同一套口径。
 // 内容变了才存快照（指纹＝正文 sha256 前 12 位，写在首行元信息里），每项目合计保留最近 30 份。
@@ -47,7 +50,39 @@ function writeAtomic(file, text) {
   fs.renameSync(tmp, file);
 }
 
-export function exportPaths(cwd) {
+/** 导出统一收在工具自己的派生目录：out/exports/projects/<项目名>--<项目键>/。 */
+export function exportRoot(root) {
+  return path.join(path.dirname(root), 'exports', 'projects');
+}
+
+/** 目录名：项目名可读 + 项目键短码，重名也不会撞。 */
+export function exportDirName(project) {
+  let name = String(project?.name || '').trim();
+  // 未归组项目的 name 可能是哈希/时间戳：改用工作目录最后一段，读起来才像人话。
+  if (!name || /^[0-9a-f]{8,}$/i.test(name) || /^\d{4}-\d{2}-\d{2}/.test(name)) {
+    name = path.basename(String(project?.root || project?.cwd || '').replace(/\\/g, '/')) || name;
+  }
+  const slug = name
+    .replace(/[\\/:*?"<>|\s]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'project';
+  const key = String(project?.key || '').replace(/^p-/, '').slice(0, 8) || 'unknown';
+  return `${slug}--${key}`;
+}
+
+export function exportPaths(root, project) {
+  const dir = path.join(exportRoot(root), exportDirName(project));
+  return {
+    dir,
+    archive: path.join(dir, 'archive'),
+    progress: path.join(dir, EXPORT_FILES.progress),
+    profile: path.join(dir, EXPORT_FILES.profile),
+    index: path.join(dir, EXPORT_FILES.index),
+  };
+}
+
+/** 旧位置：<项目>/convledger-export/。只用于迁移与「旧位置还有东西」的提示。 */
+export function legacyExportPaths(cwd) {
   const dir = path.join(cwd, EXPORT_DIR);
   return {
     dir,
@@ -56,6 +91,35 @@ export function exportPaths(cwd) {
     profile: path.join(dir, EXPORT_FILES.profile),
     index: path.join(dir, EXPORT_FILES.index),
   };
+}
+
+/** 把旧位置的整棵树复制到新位置（不覆盖已有文件）。返回搬了多少个文件。 */
+function copyLegacyInto(legacy, dest) {
+  if (!fs.existsSync(legacy.dir)) return 0;
+  let n = 0;
+  const walk = (from, to) => {
+    fs.mkdirSync(to, { recursive: true });
+    for (const ent of fs.readdirSync(from, { withFileTypes: true })) {
+      const a = path.join(from, ent.name), b = path.join(to, ent.name);
+      if (ent.isDirectory()) walk(a, b);
+      else if (!fs.existsSync(b)) { fs.copyFileSync(a, b); n++; }
+    }
+  };
+  walk(legacy.dir, dest.dir);
+  return n;
+}
+
+/** 显式迁移：复制旧位置到新位置后把旧目录删掉（只在 --migrate-legacy 时调用）。 */
+export function migrateLegacyExports(root, project, { dryRun = false } = {}) {
+  const cwd = project?.root || project?.cwd || '';
+  if (!cwd) return { ok: false, moved: 0, reason: '项目没有 cwd（未归组）' };
+  const legacy = legacyExportPaths(cwd);
+  if (!fs.existsSync(legacy.dir)) return { ok: true, moved: 0, reason: '没有旧位置' };
+  const dest = exportPaths(root, project);
+  if (dryRun) return { ok: true, dryRun: true, from: legacy.dir, to: dest.dir };
+  const moved = copyLegacyInto(legacy, dest);
+  fs.rmSync(legacy.dir, { recursive: true, force: true });
+  return { ok: true, moved, from: legacy.dir, to: dest.dir };
 }
 export const globalIndexFile = (root) => path.join(path.dirname(root), 'exports', 'INDEX.md');
 
@@ -167,8 +231,8 @@ function deltaLines(prevText, curBody, curStep) {
   return out;
 }
 
-function previousProgress(project) {
-  const p = exportPaths(project.root || project.cwd || '');
+function previousProgress(root, project) {
+  const p = exportPaths(root, project);
   let names = [];
   try { names = fs.readdirSync(p.archive).filter((n) => kindOf(n) === 'progress').sort(); } catch { return null; }
   const last = names.at(-1);
@@ -216,7 +280,7 @@ function progressParts(root, project, { prevText = null } = {}) {
 }
 
 function progressText(root, project, { now }) {
-  const p = progressParts(root, project, { prevText: previousProgress(project) });
+  const p = progressParts(root, project, { prevText: previousProgress(root, project) });
   const fp = sha(`${TEMPLATE}
 ${p.body}`);
   const latest = p.latest;
@@ -313,7 +377,7 @@ export function writeGlobalIndex(root, { now = new Date() } = {}) {
   for (const project of projects) {
     const cwd = project.root || project.cwd || '';
     if (!cwd) continue;
-    const p = exportPaths(cwd);
+    const p = exportPaths(root, project);
     if (!fs.existsSync(p.progress)) continue;
     const meta = readMetaLine(p.progress) ?? {};
     let snapshots = 0;
@@ -322,20 +386,20 @@ export function writeGlobalIndex(root, { now = new Date() } = {}) {
     for (const n of names) if (kindOf(n) === 'progress') snapshots++;
     let mtime = null;
     try { mtime = fs.statSync(p.progress).mtime.toISOString(); } catch { /* 读不到 */ }
-    rows.push({ project, at: meta.at ?? mtime ?? '', snapshots, runner: meta.runner ?? '—', step: meta.step ?? '—', live: project.counts.live > 0 });
+    rows.push({ project, dir: p.dir, at: meta.at ?? mtime ?? '', snapshots, runner: meta.runner ?? '—', step: meta.step ?? '—', live: project.counts.live > 0 });
   }
   rows.sort((a, b) => String(b.at).localeCompare(String(a.at)));
   const L = [
     `${MARK} v2 kind=global-index at=${now.toISOString()} fp=— -->`,
     '# 跨项目导出总索引',
     '',
-    `> 工具派生；生成于 ${localTime(now)}。每个项目的稳定入口是 \`<cwd>/convledger-export/${EXPORT_FILES.progress}\`。`,
+    `> 工具派生；生成于 ${localTime(now)}。每个项目的稳定入口在工具目录下：\`out/exports/projects/<项目名>--<项目键>/${EXPORT_FILES.progress}\`。`,
     `> 共 ${rows.length} 个项目有导出；没有导出的项目不在此列（\`convledger export --all\` 可一次补全）。`,
     '',
     '| 最近导出 | 项目 | agent | 第几步 | 快照 | 进行中 | 目录 |',
     '| --- | --- | --- | --- | --- | --- | --- |',
   ];
-  for (const r of rows) L.push(`| ${String(r.at).replace('T', ' ').slice(0, 19)} | ${r.project.name}（\`${r.project.key}\`） | ${r.runner} | ${r.step} | ${r.snapshots} | ${r.live ? '是' : '—'} | \`${r.project.root || r.project.cwd}\` |`);
+  for (const r of rows) L.push(`| ${String(r.at).replace('T', ' ').slice(0, 19)} | ${r.project.name}（\`${r.project.key}\`） | ${r.runner} | ${r.step} | ${r.snapshots} | ${r.live ? '是' : '—'} | \`${r.dir}\` |`);
   writeAtomic(file, L.join('\n') + '\n');
   return { file, projects: rows.length };
 }
@@ -347,8 +411,14 @@ export function writeGlobalIndex(root, { now = new Date() } = {}) {
 export function writeProjectExports(root, project, { force = false, now = new Date(), prune = false } = {}) {
   const cwd = project?.root || project?.cwd || '';
   if (!cwd) return record(root, project, { ok: false, files: [], skipped: ['项目没有 cwd（未归组），导出无处可写'], pruned: [] });
-  if (!fs.existsSync(cwd)) return record(root, project, { ok: false, files: [], skipped: [`项目目录不在了：${cwd}`], pruned: [] });
-  const p = exportPaths(cwd);
+  // 目录不在了也照常导出：导出已收在工具目录，不再依赖项目目录存在。
+  const p = exportPaths(root, project);
+  // 旧位置还有导出：先原样复制过来（不删旧目录），让老机器/老文档仍能找到历史快照。
+  let migrated = 0;
+  const legacy = legacyExportPaths(cwd);
+  if (!fs.existsSync(p.progress) && fs.existsSync(legacy.dir)) {
+    try { migrated = copyLegacyInto(legacy, p); } catch { /* 复制失败不影响新写 */ }
+  }
   // junction / 符号链接可能把写入引到别处：本地工具，遇到就拒绝，不猜。
   try {
     if (fs.lstatSync(p.dir).isSymbolicLink()) return record(root, project, { ok: false, files: [], skipped: [`${p.dir} 是符号链接，拒绝写入`], pruned: [] });
@@ -368,6 +438,8 @@ export function writeProjectExports(root, project, { force = false, now = new Da
   const files = [];
   const skipped = [];
   const pruned = [];
+  const notes = [];
+  if (migrated) notes.push(`已从旧位置复制 ${migrated} 个文件到工具目录（旧目录未删；要搬走跑 export --migrate-legacy）`);
   for (const [kind, made] of [['progress', progressText(root, project, { now })], ['profile', profileText(root, project, { now })]]) {
     const live = p[kind];
     const prev = readMetaLine(live);
@@ -415,7 +487,7 @@ export function writeProjectExports(root, project, { force = false, now = new Da
   }
   try { writeIndex(p); } catch (e) { skipped.push(`INDEX.md 写不了：${String(e?.message ?? e).split('\n')[0]}`); }
   try { writeGlobalIndex(root, { now }); } catch (e) { skipped.push(`跨项目总索引写不了：${String(e?.message ?? e).split('\n')[0]}`); }
-  return record(root, project, { ok: files.length > 0, dir: p.dir, files, skipped, pruned, desired });
+  return record(root, project, { ok: files.length > 0, dir: p.dir, files, skipped: [...notes, ...skipped], pruned, desired, migrated });
 }
 
 /** 最近一次导出尝试：成功/跳过原因都留痕，`export --list` 会带一行。 */
@@ -454,14 +526,20 @@ function fileIntegrity(raw) {
 export function checkExports(root, project, { now = new Date() } = {}) {
   const cwd = project?.root || project?.cwd || '';
   if (!cwd) return { ok: false, items: [], error: '项目没有 cwd（未归组）' };
+  const paths = exportPaths(root, project);
+  const legacy = legacyExportPaths(cwd);
+  const legacyHas = fs.existsSync(legacy.dir);
   const items = [];
   for (const [kind, made] of [['progress', progressText(root, project, { now })], ['profile', profileText(root, project, { now })]]) {
-    const file = exportPaths(cwd)[kind];
+    const file = paths[kind];
     const meta = readMetaLine(file);
     let status;
     let note = null;
     let actualFp = null;
-    if (!fs.existsSync(file)) status = 'missing';
+    if (!fs.existsSync(file)) {
+      status = legacyHas ? 'legacy' : 'missing';
+      note = legacyHas ? `旧位置还有导出：${legacy.dir}（跑 convledger export 复制到工具目录，或 export --migrate-legacy 搬走）` : null;
+    }
     else if (!meta) status = 'unmanaged';
     else if (meta.project !== project.key || meta.kind !== kind) { status = 'foreign'; note = '首行指向另一个项目/类型'; }
     else {
@@ -474,5 +552,5 @@ export function checkExports(root, project, { now = new Date() } = {}) {
     }
     items.push({ kind, file, status, fp: made.fp, actualFp, prevFp: meta?.fp ?? null, at: meta?.at ?? null, note });
   }
-  return { ok: items.every((x) => x.status === 'fresh'), items };
+  return { ok: items.every((x) => x.status === 'fresh'), items, dir: paths.dir };
 }

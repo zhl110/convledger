@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { blocksOf, resultText, tok } from './lib.mjs';
+import { blocksOf, tok, toolOpOf } from './lib.mjs';
 import { freezeSource, verifyFrozen } from './store.mjs';
 import { normalizeRecords } from './project.mjs';
 import { NEW_MATERIAL_TOKENS } from './cost.mjs';
@@ -119,7 +119,8 @@ export function associateBatch(ledger, frozen) {
   return associateTools(normalizeRecords(ledger.runner, raw));
 }
 
-/** 把冻结区间变成给模型看的材料：只收原话、调用摘要与回执开头，不搬整段工具输出。
+/** 把冻结区间变成给模型看的材料：只收真人原话、assistant 结论和写/改类调用摘要。
+ *  工具回执、读/搜/运行类调用、系统提醒、attachment 和控制记录不进素材；它们不是记忆，只会把工作单元撑大。
  *  预算按完整记录切：放不下的记录不装、也不越过它推进游标（coveredToByte 指到上一条为止）。 */
 export function materialUnits(frozen, { runner, budget = NEW_MATERIAL_TOKENS } = {}) {
   const text = fs.readFileSync(frozen.file).subarray(frozen.fromByte, frozen.toByte).toString('utf8');
@@ -139,11 +140,10 @@ export function materialUnits(frozen, { runner, budget = NEW_MATERIAL_TOKENS } =
     const r = norm[i];
     const blocks = blocksOf(r);
     const prose = blocks.filter((b) => b?.type === 'text').map((b) => b.text ?? '').join('\n').trim();
-    const calls = blocks.filter((b) => b?.type === 'tool_use')
+    const calls = blocks.filter((b) => b?.type === 'tool_use' && ['write', 'edit'].includes(toolOpOf(b.name)))
       .map((b) => `[call ${b.name}] ${String(b.input?.command ?? JSON.stringify(b.input ?? {})).slice(0, 160)}`);
-    const results = blocks.filter((b) => b?.type === 'tool_result')
-      .map((b) => `[result] ${resultText(b).replace(/\s+/g, ' ').slice(0, 240)}`);
-    const body = [prose, ...calls, ...results].filter(Boolean).join('\n');
+    // 工具回执不是记忆；读/搜/跑也不是。只保留写/改类调用作为状态变化线索。
+    const body = [prose, ...calls].filter(Boolean).join('\n');
     const cost = body ? tok(body) : 0;
     const fits = used + cost <= budget;
     if (!fits && units.length) { omittedFrom = frozen.records[i]?.line ?? null; break; }

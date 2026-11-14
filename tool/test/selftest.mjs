@@ -5,46 +5,73 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
+import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync, spawnSync, spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { build, RULE_AUTHOR } from '../src/build.mjs';
-import { resolveSegments, checkAnchor, renderBody, writeStore, searchLedger, syncArchive, effectiveSource, archiveState, loadLedger, freezeSource, verifyFrozen } from '../src/store.mjs';
+import { buildTrees, pickStray, pickKeep } from '../src/host-doctor.mjs';
+import { readLlm, writeLlm, clearLlm, maskKey, pickModel, bridgeDataDir, describeNetError, saveKeyEntry, listSavedKeys, useSavedKey, removeSavedKey, ensureActiveSaved } from '../src/llm.mjs';
+import { indexWindowed, rawRecords, SLICE_BYTES } from '../src/window.mjs';
+import { resolveSegments, checkAnchor, anchorChecker, renderBody, writeStore, searchLedger, syncArchive, effectiveSource, archiveState, loadLedger, freezeSource, verifyFrozen } from '../src/store.mjs';
 import { readView, wlen, TOOLISH, NOSAY, stepsOf } from '../src/view.mjs';
 import { serveMap } from '../src/map.mjs';
 import { libraryOf, findSession, LIVE_MIN } from '../src/library.mjs';
 import { resolveCurrent, cwdFromHead, normCwd, resolveWriteTarget } from '../src/current.mjs';
-import { associateTools, mergePending, readPending, writePending, isMaintenanceCall, prepareBatch, verifyPrepared } from '../src/sync.mjs';
+import { associateTools, mergePending, readPending, writePending, isMaintenanceCall, prepareBatch, verifyPrepared, materialUnits } from '../src/sync.mjs';
 import { createState, validateState, validateTask, effectiveStatus, counts, dependencyCycle, applyBatch, projectView, transitionCandidate } from '../src/progress.mjs';
 import { commitBatch, readState, stateFile, writeState } from '../src/state-io.mjs';
-import { ADAPTERS, detectAdapter } from '../src/project.mjs';
+import { ADAPTERS, detectAdapter, sourceRoots } from '../src/project.mjs';
 import { CARD_TOKEN_CAP, INDEX_FIXED_TOK, INDEX_TOKENS_PER_SEGMENT, ROUTE_SHARE_CAP, CLAIM_SENTENCE_CAP, CLAIM_RESULT_CITABLE_CAP, CLAIM_TOPIC_MAX, CLAIM_TAKEAWAY_MAX, CLAIM_MARK_W, BLOCK_GIST_W, TOPIC_NAME_MAX, MAX_TOPICS_PER_SEGMENT, MIN_SEGMENTS_PER_TOPIC, NOTE_TITLE_MAX, NOTE_BODY_MAX, REQUEST_TEXT_MAX, SUMMARY_SHORT_W, SUMMARY_TITLE_MAX, SUMMARY_NEED_MAX, SUMMARY_LESSON_MAX, MEMORY_DIGEST_TOKENS, MEMORY_DIGEST_FIXED, MEMORY_DIGEST_PER_SESSION, MEMORY_READ_FIXED, MEMORY_READ_PER_ENTRY } from '../src/cost.mjs';
 import { validateSummary, validateTaskTitle, readSummaries, writeSummaries, blockHash } from '../src/summaries.mjs';
 import { lessonsOf } from '../src/lessons.mjs';
+import { profileDue, markProfilePrompt } from '../src/profile-auto.mjs';
+import { runAuto } from '../src/closeout-auto.mjs';
+import { noticeFor, sourceStamp, readDeploy, writeDeploy, deployFile, upgradeLines, recordedHubPid } from '../src/upgrade.mjs';
+import { installGitHook, removeGitHook, hookState, hookFile } from '../hooks/git-post-merge.mjs';
 import { sentencesOf, materials, validateClaim, factTokens, MOVES } from '../src/claims.mjs';
 import { appendNote, appendRequest, readNotes, readRequests, closeRequest, validateNote } from '../src/notes.mjs';
 import { deriveBranches, validateLabel, readTopics, writeTopics, publishedTopics, BRANCH_STATES } from '../src/topics.mjs';
 import { readPhases, writePhases, validatePhases, phaseHash, phaseSegs, applyPhases } from '../src/phases.mjs';
 import { readChapters, writeChapters, validateChapters } from '../src/chapters.mjs';
 import { scanDocs, resolveRef } from '../src/docs.mjs';
-import { briefText, phaseDetailText, chapterDetailText, handoffText } from '../src/brief.mjs';
+import { briefText, briefScenes, phaseDetailText, chapterDetailText, handoffText } from '../src/brief.mjs';
 import { tok, readJsonl, sha } from '../src/lib.mjs';
 import { renderCard } from '../src/cards.mjs';
 import { projectsOf, projectKey } from '../src/projects.mjs';
 import { projectLive } from '../src/project-live.mjs';
-import { exportPaths, writeProjectExports, globalIndexFile } from '../src/export.mjs';
-import { validateMemoryEntry, putProjectMemories, readProjectMemories, projectMemoryDir, memoryContext, applyFreshness, memoryRead, digestMaterials, validateUserEntry, putUserMemories, readUserMemories, userMemoryDir, promoteEntry, unpromoteEntry, userContext, digestUserMaterials, publishCandidates } from '../src/memories.mjs';
+import { exportPaths, exportRoot, legacyExportPaths, migrateLegacyExports, writeProjectExports, globalIndexFile, checkExports } from '../src/export.mjs';
+import { validateMemoryEntry, putProjectMemories, readProjectMemories, projectMemoryDir, memoryContext, applyFreshness, memoryRead, digestMaterials, validateUserEntry, putUserMemories, readUserMemories, userMemoryDir, promoteEntry, unpromoteEntry, userContext, digestUserMaterials, publishCandidates, forgetUserEntry } from '../src/memories.mjs';
 import { renderSkill } from '../skill/install.mjs';
-import { hostRows, shortcutPs, removePs, buildRecent } from '../src/setup.mjs';
+import { hostRows, shortcutPs, removePs, buildRecent, isPortFree, findOpenPort } from '../src/setup.mjs';
 import { outstandingFor } from '../src/outstanding.mjs';
+import { matchHostProcesses } from '../src/status.mjs';
+import { connectionState, isOff } from '../src/connection.mjs';
+import { readPrefs, resolvePrefs, HOST_DEFAULTS, AUTO_BUILD_MODES } from '../src/prefs.mjs';
+import { pickSummaryBatch } from '../src/summary-batch.mjs';
+import { collabBrief, MEMORIES_SCHEMA } from '../src/memories.mjs';
+import { memoryDue } from '../src/profile-auto.mjs';
+import { CHANNELS, STATUS, DEFAULT_CAPS, BAD_TOOLS, dispatchFor, loadCaps, capsWarnings, capBlockReason, capsTable } from '../src/host-caps.mjs';
+import { MEMORY_PROJECT_SESSION_DUE } from '../src/cost.mjs';
+import { hostTitleFor } from '../src/host-titles.mjs';
+import { addInternal, readInternal, setWorker, getWorker } from '../src/internal.mjs';
+import { syncCodexProjections } from '../src/codex.mjs';
+import { usageReport } from '../src/usage.mjs';
+
+// 测试环境不派生常驻 hub：曾有一个 setup 首跑用例在真端口 8765 起 hub、指向测试库，泄漏后 App 看板
+// 显示空数据。设这个环境变量后 ensureHub 只报「跳过」、不 spawn，结构性杜绝再次发生。
+process.env.CONVLEDGER_NO_RESIDENT_HUB = '1';
+// 测试绝不扫真机 Codex：把源指到不存在的目录、投影指到临时目录（否则真 rollout 会漏进测试清单）。
+process.env.CONVLEDGER_CODEX_SRC = `${os.tmpdir()}/convledger-nocodex-${process.pid}`;
+process.env.CONVLEDGER_CODEX_OUT = `${os.tmpdir()}/convledger-codexout-${process.pid}`;
 
 /** 校准夹具：优先 --session 参数，其次 CONVLEDGER_SELFTEST_SESSION，再找本机 Windows 的老路径，
  *  最后在 ~/.qoder/projects 里挑最新一段。换机器/换系统时不用改源码，只给路径。 */
 export const CALIBRATION = (() => {
   const env = process.env.CONVLEDGER_SELFTEST_SESSION;
   if (env && fs.existsSync(env)) return env.replace(/\\/g, '/');
-  const win = '~/.qoder/projects/D--mycode-conversation-graph-research/demo0001-838b-4697-95fc-9756c7ce93eb.jsonl';
+  const win = '~/.qoder/projects/D--convledger/demo0001-838b-4697-95fc-9756c7ce93eb.jsonl';
   if (fs.existsSync(win)) return win;
   const root = path.join(os.homedir(), '.qoder', 'projects');
   try {
@@ -71,12 +98,54 @@ const tools = new URL('..', import.meta.url).pathname.replace(/^\/(\w:)/, '$1').
 
 // 每次运行一个自己的测试根：夹具、store、导出全落在 out/test-runs/<run-id>/，
 // 不写真实 out/store、真实 convledger-export，也不和另一个并行运行共用目录。
+// 子进程一律给 64MB 缓冲：Node 默认 1MB，而 sessions --all / projects --json 在几千本账的
+// 机器上轻松超 1MB，spawnSync 会以 ENOBUFS 失败、或把 stdout 截成半个 JSON（真机踩过）。
+const BIG_BUF = 64 * 1024 * 1024;
 const RUN = `${tools}/out/test-runs/${process.pid}-${Date.now().toString(36)}`;
 const fixture = (name) => {
   const dir = `${RUN}/${name}`;
   fs.rmSync(dir, { recursive: true, force: true });
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+};
+
+/** 合成一段够长的会话当夹具：**不绑本机任何真实对话**。
+ *  以前「块综述层/阶段层/章层」直接拿默认机器上的那段会话做样本，断言写死了它的特征
+ *  （某块有 ≥16 字中文原话、主线 ≥60 步）。换台机器/换段会话就整片变红，红得没有信息量。
+ *  这里每个 ask 产生一步（真人提问 + 工具调用 + 回复），原话是 17 个汉字，够反截段闸门用。 */
+/** 合成会话的行生成器：与 qoderFixtureLines 同形，但提问是一句**连续 20 多个汉字**的话，
+ *  这样「原话截段」这类闸门永远有真材料可试，不看机器上那段会话恰好写了什么。 */
+function synthLines(sid, asks, cwd = 'D:/synth-proj') {
+  const rec = (n, o) => ({ uuid: `s-${n}`, timestamp: new Date(Date.parse('2026-11-05T02:00:00Z') + n * 45000).toISOString(), cwd, sessionId: sid, ...o });
+  const rows = [rec(0, { type: 'workspace-directories', directories: [cwd] }), rec(1, { type: 'runtime-config', model: 'dfmodel' })];
+  let n = 2;
+  for (let i = 0; i < asks; i++) {
+    const text = `第${i + 1}件：请把这一段的说明写清楚并且顺手补一条能跑起来的测试用例`;
+    rows.push(rec(n++, { type: 'user', userType: 'external', origin: { kind: 'human' }, promptId: `q${i}`, humanInput: { text, mode: 'prompt' }, message: { role: 'user', content: [{ type: 'text', text }] } }));
+    rows.push(rec(n++, { type: 'assistant', model: 'dfmodel', message: { role: 'assistant', content: [{ type: 'tool_use', id: `d${i}`, name: 'Edit', input: { file_path: `${cwd}/src/part${i}.mjs`, new_string: 'y'.repeat(700) } }] } }));
+    rows.push(rec(n++, { type: 'user', origin: { kind: 'tool-result' }, message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `d${i}`, content: `已写入 ${cwd}/src/part${i}.mjs`, is_error: false }] } }));
+    rows.push(rec(n++, { type: 'assistant', model: 'dfmodel', message: { role: 'assistant', content: [{ type: 'text', text: `第 ${i + 1} 件做完：说明与测试都补上了。` }] } }));
+  }
+  return rows.map((r) => JSON.stringify(r)).join('\n') + '\n';
+}
+
+function synthStore({ asks = 80, cwd = 'D:/synth-proj', sid = 'synth00000000001' } = {}) {
+  const base = fixture(`synth-${sid}`);
+  const file = `${base}/${sid}.jsonl`;
+  fs.writeFileSync(file, synthLines(sid, asks, cwd), 'utf8');
+  const b = build(file, { storeRoot: base });
+  return { built: b, ledger: b.ledger, segments: b.ledger.segments, file, base, sid };
+}
+
+/** 只读源文件头若干字节、取完整行（丢掉可能被截断的末行）：夹具源不必把整份 272MB 拉进来。 */
+const headLines = (file, bytes) => {
+  const fd = fs.openSync(file, 'r');
+  try {
+    const b = Buffer.alloc(bytes);
+    const n = fs.readSync(fd, b, 0, bytes, 0);
+    const lines = b.toString('utf8', 0, n).split('\n').filter(Boolean);
+    return lines.slice(0, -1);
+  } finally { fs.closeSync(fd); }
 };
 
 test('projection recognises the runner and keeps provenance', () => {
@@ -97,7 +166,9 @@ test('segments tile the turn line without gaps or overlaps', () => {
 });
 
 test('every anchor still resolves to the bytes it was built from', () => {
-  for (const s of segments) assert.ok(checkAnchor(ledger, s).ok, `anchor broken for ${s.id}`);
+  // 批量校验：源只读一次；逐段 checkAnchor 会把 230MB 读上 700 遍
+  const verify = anchorChecker(ledger);
+  for (const s of segments) assert.ok(verify(s).ok, `anchor broken for ${s.id}`);
 });
 
 test('route layer stays a routing layer', () => {
@@ -230,7 +301,8 @@ test('a verified claim on disk is still provable, and the surfaces say so', () =
     assert.match(card, new RegExp(`增量\\(${c.moves}/verified\\)`), `${id} 的卡没把 basis 翻成 verified`);
     assert.ok(card.includes(c.text.slice(0, 40)), `${id} 的卡上找不到这条已证增量`);
   }
-  if (isCalibration) assert.ok(verified.length >= 3, `本会话应已有模型层增量，当前 ${verified.length} 条`);
+  // 这里只核「标了 verified 的都必须当场重证得出来」。至于这段会话该不该有已证增量，
+  // 是校准会话自己的事——写成硬断言后，换段会话就整片变红，红得没有信息量。
 });
 
 test('body retrieval applies the truncation matrix, not silent clipping', () => {
@@ -265,7 +337,7 @@ test('segment specs resolve the way the CLI advertises', () => {
 
 test('sessions costs like picking a target, not like dumping the store', () => {
   const cli = new URL('../bin/convledger.mjs', import.meta.url).pathname.replace(/^\/(\w:)/, '$1').replace(/\\/g, '/');
-  const run = (args) => execFileSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
+  const run = (args) => execFileSync(process.execPath, [cli, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   const out = run(['sessions']);
   assert.ok(tok(out) <= 800, `sessions costs ${tok(out)} tokens — the full ledger list belongs behind --all`);
   // 默认档是一本文一行的人读文本：中文键的 JSON 两头不靠（页面读不出，人读得累）。
@@ -276,7 +348,9 @@ test('sessions costs like picking a target, not like dumping the store', () => {
   assert.match(run(['sessions', '--all']), /^全部 \d+ 本/m, '--all 要逐本列全');
   const j = JSON.parse(run(['sessions', '--json']));
   assert.ok(j.counts.sessions > 0 && j.indexed[0].sourceFile, '--json 才给源路径与整理层');
-  assert.ok(j.indexed[0].organize, '--json 要带 organize 字段');
+  // 真实 store 里最新一条可能是刚建、还没建账的会话（organize=null 是设计如此），所以要挑一条**已建账**的来核 organize
+  const built = j.indexed.find((e) => e.organize);
+  assert.ok(built && built.organize, '--json 要给已建账条目带 organize 字段');
 });
 
 test('会话库看得出哪段整理过：色标判据与 outstanding 同一条尺', () => {
@@ -310,7 +384,7 @@ test('会话库看得出哪段整理过：色标判据与 outstanding 同一条�
 test('a bad argument costs one line and a non-zero exit, not a stack trace', () => {
   const cli = new URL('../bin/convledger.mjs', import.meta.url).pathname.replace(/^\/(\w:)/, '$1').replace(/\\/g, '/');
   const run = (args) => {
-    try { return { code: 0, out: execFileSync(process.execPath, [cli, ...args], { encoding: 'utf8', stdio: 'pipe' }) }; }
+    try { return { code: 0, out: execFileSync(process.execPath, [cli, ...args], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: 'pipe' }) }; }
     catch (e) { return { code: e.status, out: `${e.stdout ?? ''}${e.stderr ?? ''}` }; }
   };
   for (const args of [['card', 'X99', '--session', 'demo0001'], ['show', '--session', 'nope'], ['index'], ['index', 'no-such-file.jsonl']]) {
@@ -392,9 +466,17 @@ test('the map surface publishes structure, not bodies, and only to this machine'
     });
     r.on('error', rej); if (data !== null) r.write(data); r.end();
   });
-  const get = (path, host) => call('GET', path, { host });
-  const post = (path, body, headers = {}) => call('POST', path, { body, headers: { 'content-type': 'application/json', ...headers } });
+  const get = (path, host) => call('GET', path, { host, headers: { 'x-hub-key': h.token } });
+  const post = (path, body, headers = {}) => call('POST', path, { body, headers: { 'x-hub-key': h.token, 'content-type': 'application/json', ...headers } });
   try {
+    // 门禁：没 token 一律 403（浏览器 Web 入口下线，2026-11-14）；带 token 从 query / cookie 进都放行
+    assert.equal((await call('GET', '/app')).status, 403, '无 token 的裸请求要被门禁挡住');
+    const keyed = await call('GET', `/app?k=${h.token}`);
+    assert.equal(keyed.status, 200, '带 token 从 query 进要放行');
+    assert.ok(String(keyed.headers['set-cookie'] || '').includes('hubk='), '首次带 k 要种 cookie，之后同源请求自动带');
+    assert.equal((await call('GET', '/app.js', { headers: { cookie: `hubk=${h.token}` } })).status, 200, 'cookie 里的 token 也认');
+    assert.equal((await call('GET', '/app.js', { headers: { 'x-hub-key': h.token } })).status, 200, '头里的 token 也认');
+    assert.equal((await call('GET', '/app?k=deadbeef')).status, 403, '错的 token 一样挡');
     // 根地址是会话库（hub），画布在 /s/<id>/ 下。
     const hubPage = await get('/');
     assert.equal(hubPage.status, 200);
@@ -436,18 +518,101 @@ test('the map surface publishes structure, not bodies, and only to this machine'
     assert.match(launcher, /bin\\convledger\.mjs/, '双击入口要指向真实 CLI');
     assert.match(launcher, /map --open/, '双击入口要走 map --open（hub 活着复用、死了顺手起）');
     assert.match(launcher, /CurrentDirectory = root/, '双击入口要把 cwd 放在仓库根，否则当前会话解析不到这个项目');
+    // 应用窗口：快捷方式指向 open-app.vbs，走 convledger app（--app 窗口）；浏览器入口已下线（token 门禁）
+    const appLauncher = fs.readFileSync(new URL('../open-app.vbs', import.meta.url), 'utf8');
+    assert.match(appLauncher, /bin\\convledger\.mjs/, '应用入口要指向真实 CLI');
+    assert.match(appLauncher, / app /, '应用入口要走 convledger app');
+    assert.match(appLauncher, /CurrentDirectory = root/, '应用入口也要把 cwd 放在仓库根');
+    const man = await get('/manifest.webmanifest');
+    assert.equal(man.status, 200, 'PWA manifest 要由 hub 提供');
+    assert.equal(JSON.parse(man.body).display, 'standalone', 'manifest 要声明独立窗口');
+    assert.equal(JSON.parse(man.body).start_url, '/app', '装成应用后先落在本机看板');
+    for (const p of ['/icons/icon-192.png', '/icons/icon-512.png', '/icons/icon-192-v2.png', '/icons/icon-512-v2.png']) {
+      const r = await get(p);
+      assert.equal(r.status, 200, `${p} 要能取到`);
+      assert.match(r.headers['content-type'], /^image\/png/, `${p} 要按图片发`);
+    }
+    const icon512 = fs.readFileSync(new URL('../web/icons/icon-512-v2.png', import.meta.url));
+    assert.equal(icon512[25], 6, '页面图标要带透明通道：白底已经抠掉');
+    const deskIco = fs.readFileSync(new URL('../web/convledger.ico', import.meta.url));
+    assert.ok(deskIco.length > 20000, '桌面图标要是多尺寸 ICO，不是单张缩略图');
+    assert.match((await get('/')).body, /rel="manifest"/, '会话库要挂 manifest，浏览器才能「安装为应用」');
+    assert.match(fs.readFileSync(new URL('../web/atlas.html', import.meta.url), 'utf8'), /rel="manifest"/, '画布也要挂 manifest');
     const arch = await get('/architecture');
     assert.equal(arch.status, 200, '架构图必须由 hub 提供，不能只躺在仓库里');
     assert.match(arch.body, /架构与工作路线图/, '架构图标题要对得上');
-    assert.match(arch.body, /"tasks":\[/, '工作路线图的数据要嵌进页面（不靠外网）');
-    assert.match(arch.body, /fetch\('\/architecture\.json'/, '架构页要拉实时路线图，不能只吃内嵌快照');
-    const archJson = await get('/architecture.json');
-    assert.equal(archJson.status, 200, '实时路线图接口要由 hub 提供');
-    const archData = JSON.parse(archJson.body);
-    assert.ok(Array.isArray(archData.tasks) && Number.isInteger(archData.revision), '实时路线图要带 revision 与任务数组');
+    assert.match(arch.body, /id="tabFlow"/, '架构页要有默认的「运行链路」视图');
+    assert.match(arch.body, /id="flow"/, '运行链路要有独立的总览面板');
+    assert.match(arch.body, /data-node="qoder"/, '运行链路的主干卡片要能点进模块明细');
+    assert.match(arch.body, /setMode\('flow'\)/, '首次进入先看运行链路，不是直接掉进八层模块图');
+    assert.match(arch.body, /body\.embed header\{display:flex/, 'App 内嵌时也要保留三个视图 tab，不能整条页头藏掉');
+    assert.match(arch.body, /id="r3d"/, '运行时路线要有三维画布容器');
+    assert.match(arch.body, /three\.module\.min\.js/, '运行时路线要用本地 Three.js');
+    assert.match(arch.body, /WebGLRenderer/, '运行时路线要真的建 WebGL 场景');
+    assert.match(arch.body, /makeRuntime3d/, '运行时路线要有独立的三维构图入口');
+    assert.doesNotMatch(arch.body, /id="roadmap"/, '不再往架构页塞项目任务快照');
+    assert.doesNotMatch(arch.body, /architecture\.json/, '运行时路线不再拉项目任务接口');
+    const three = await get('/vendor/three.module.min.js');
+    assert.equal(three.status, 200, 'Three.js 要由本机 hub 提供，不能靠 CDN');
+    assert.match(three.headers['content-type'], /javascript/, 'Three.js 要按脚本发');
+    assert.ok(three.body.length > 500000, 'Three.js 完整模块不能是占位文件');
     assert.match((await get('/')).body, /href="\/architecture"/, '架构页入口在会话库顶栏');
+    // 应用看板：App 窗口落在 /app，旧 /status 只做跳转；数据与写操作仍走同一套接口
+    const appPage = await get('/app');
+    assert.equal(appPage.status, 200, '应用看板要由 hub 提供');
+    assert.match(appPage.body, /本机看板/, '应用看板要有自己的标题');
+    assert.match(appPage.body, /本机 agent/, '应用看板要讲 agent');
+    assert.match(appPage.body, /data-view="sessions"/, '应用看板的会话要留在 App 壳里');
+    assert.match(appPage.body, /data-view="arch"/, '应用看板的架构要留在 App 壳里');
+    assert.match(appPage.body, /id="view-canvas"/, '画布也要留在 App 壳里');
+    assert.match(appPage.body, /data-view="canvas"/, '地图是左栏独立入口，回会话靠左栏而不是画布内按钮');
+    assert.match(appPage.body, /data-view="work"/, '工作台是左栏独立入口');
+    assert.match(appPage.body, /id="view-work"/, '工作台视图要留在 App 壳里');
+    assert.match(appPage.body, /data-view="usage"/, '用量是 App 壳里的独立入口');
+    assert.match(appPage.body, /id="view-usage"/, '用量视图要留在 App 壳里');
+    assert.match(appPage.body, /id="usagesources"/, '用量要按 agent 汇总');
+    assert.match(appPage.body, /id="usageinjections"/, '用量要逐条列注入');
+    assert.match(appPage.body, /app\.js\?v=/, '应用脚本要带版本，改完刷新一次就拿到新文件');
+    assert.ok(!/href="\/"/.test(appPage.body), '应用看板不再跳网页会话库');
+    const appJs = (await get('/app.js')).body;
+    assert.match(appJs, /一键连接/, '应用看板要给一键连接');
+    assert.match(appJs, /function showView/, '应用看板要在壳内切视图');
+    assert.match(appJs, /function openCanvas/, '点会话要在 App 壳内开画布');
+    assert.match(appJs, /rows\.slice\(0, 4\)/, '每个 agent 默认只展开 4 个会话');
+    assert.match(appJs, /data-more/, '每个 agent 要有展开/收起入口');
+    assert.match(appJs, /\/\?embed=1/, '画布与工作台内嵌时要带 embed，去掉第二层 chrome');
+    assert.match(appJs, /function loadProjects/, '工作台的项目清单要从 /projects.json 现读');
+    assert.match(appJs, /function loadUsage/, '用量视图要懒加载，不拖慢首屏');
+    assert.match(appJs, /\/usage\.json/, '用量数据要走 /usage.json');
+    assert.match(appJs, /无用量/, '宿主没上报 token 时要写状态，不能写 0');
+    assert.match(appPage.body, /data-src="\/architecture\?embed=1"/, '架构视图用内嵌方式留在 App 壳里');
+    assert.match((await get('/architecture?embed=1')).body, /classList\.add\('embed'\)/, '架构页要能隐藏自己的页头，避免双栏');
+    for (const m of appPage.body.matchAll(/(?:href|src)="(\/[^"]*)"/g)) {
+      const p = m[1].split('?')[0];
+      if (p === '/app') continue;
+      assert.notEqual((await get(p)).status, 404, `app.html refers to ${p} but the server does not serve it`);
+    }
+    const oldStatus = await get('/status');
+    assert.equal(oldStatus.status, 302, '旧状态页要跳到应用看板');
+    assert.equal(oldStatus.headers.location, '/app');
+    const st = JSON.parse((await get('/status.json')).body);
+    assert.ok(Array.isArray(st.hosts) && st.hosts.length >= 5, '状态要列出五家 agent');
+    assert.ok(st.totals && Number.isInteger(st.totals.sessions), '状态要带账本总量');
+    assert.equal(typeof st.refreshing, 'boolean', 'status.json 要带 refreshing，App 壳才知道要不要转圈');
+    assert.equal((await post('/status/action', { client: 'qoder', action: 'hooks' }, { origin: 'http://evil.example' })).status, 403, '外站来源不许装 hooks');
+    assert.equal((await post('/status/action', { client: 'nope', action: 'hooks' }, { origin: 'http://127.0.0.1:8791' })).status, 400, '未知 agent 要拒绝');
+    assert.match((await get('/')).body, /href="\/app"/, '应用看板入口在会话库顶栏');
+    assert.match((await get('/')).body, /href="\/app\?view=usage"/, '用量入口也在会话库顶栏');
+    const usageAlias = await get('/usage');
+    assert.equal(usageAlias.status, 302, '旧地址 /usage 只做跳转，不维护第二份页面');
+    assert.equal(usageAlias.headers.location, '/app?view=usage');
+    const usageMapSrc = fs.readFileSync(new URL('../src/map.mjs', import.meta.url), 'utf8');
+    assert.match(usageMapSrc, /refresh\.getUsage\(root/, '用量统计要走后台缓存，不在请求路径同步扫几百 MB');
+    assert.equal((await get('/app.css')).status, 200, '应用看板样式要能取到');
+    assert.equal((await get('/app.js')).status, 200, '应用看板脚本要能取到');
+    assert.ok(!/innerHTML/.test((await get('/app.js')).body), '应用看板也不用 innerHTML');
+    assert.match((await get('/app.css')).body, /@media \(max-width: 820px\)/, '应用看板要能跟着窗口变窄重排');
     assert.ok(!page.body.includes('/architecture'), '会话画布不挂工具架构页——两者不是一个部分');
-    assert.equal((await get('/app.js')).status, 404, '旧的按部分两级页必须已经撤掉');
     assert.equal((await get('/index.html')).status, 404, '旧的按部分两级页必须已经撤掉');
     assert.equal((await get('/atlas/../index.html')).status, 404, 'the atlas URL must not escape the allowlist');
     assert.equal((await get('/', 'evil.example.com')).status, 403, 'another host must not be able to read this session');
@@ -474,6 +639,7 @@ test('the map surface publishes structure, not bodies, and only to this machine'
     assert.ok(dv.meta.lagSec >= 0, '落后秒数不能是负的');
     assert.ok(dv.meta.sourceMtime, '落后秒数要有源的最后写入时刻作依据');
     assert.match(String(dv.meta.projectKey), /^p-[0-9a-f]{12}$/, '会话没给出项目键——画布上的「项目页」入口就无从链起');
+    assert.equal(typeof dv.meta.refreshing, 'boolean', 'data.json 要带 refreshing，前台才知道要不要转圈');
 
     // ---- 写入口：同源 + JSON + Host 三道闸，锚点必须在账本里 ----
     const segW = segments[Math.floor(segments.length / 2)].id;
@@ -509,6 +675,206 @@ test('the map surface publishes structure, not bodies, and only to this machine'
   } finally { h.stop(); }
 });
 
+test('后台刷新：请求路径不内联 build，视图先回缓存、重算交 worker（PRD-refresh）', async () => {
+  // 静态契约：data.json/status.json/sessions.json 都走 refresh 管理器；旧的同步重建已删。
+  const mapSrc = fs.readFileSync(new URL('../src/map.mjs', import.meta.url), 'utf8');
+  assert.match(mapSrc, /createRefresh\(\)/, 'hub 要持有一份刷新管理器');
+  assert.match(mapSrc, /refresh\.getView\(root, st, rebuildSec\)/, 'data.json 要走缓存视图，不内联重建');
+  assert.match(mapSrc, /refresh\.getStatus\(root/, 'status.json 要走后台快照');
+  assert.match(mapSrc, /searchParams\.get\('force'\)/, '手动刷新要能绕过快照缓存');
+  assert.match(mapSrc, /refresh\.getSessions\(root/, 'sessions.json 要走后台快照');
+  assert.match(mapSrc, /refresh\.stop\(\)/, 'hub 停时要收掉 worker');
+  assert.ok(!/ensureFresh|rebuildOnce/.test(mapSrc), '旧的同步重建（占住事件循环）必须已经删掉');
+  const workerFile = new URL('../src/refresh-worker.mjs', import.meta.url);
+  assert.ok(fs.existsSync(workerFile), '后台重算要有独立的 worker 入口');
+  const workerSrc = fs.readFileSync(workerFile, 'utf8');
+  assert.match(workerSrc, /parentPort\.on\('message'/, 'worker 要收主线程派来的任务');
+  assert.match(workerSrc, /import \{ indexWindowed \}/, '建账（全量或按片）要在 worker 里跑，不在主线程');
+  assert.doesNotMatch(mapSrc, /import \{[^}]*\b(projectsOf|projectLive|projectExperience|projectProfile|memoryDue|statusSnapshot|libraryOf|usageReport)\b/,
+    '主线程不许再 import 全库重活（2026-11-13 卡死根因）');
+  const refreshSrc = fs.readFileSync(new URL('../src/refresh.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(refreshSrc, /import \{[^}]*\b(statusSnapshot|libraryOf|usageReport)\b/,
+    '刷新管理器不许留「worker 起不来就内联算一遍」的兜底');
+
+  // 行为契约：冷开即画、缓存命中零重算、人写层内联补、模型层变化先回旧的再后台换。
+  const { createRefresh } = await import('../src/refresh.mjs');
+  const root = fixture('refresh');
+  const dir = writeStore(root, built);
+  for (const f of ['notes.json', 'requests.jsonl']) fs.rmSync(`${dir}/${f}`, { force: true });
+  const mgr = createRefresh();
+  const st = { dir, lastError: null };
+  try {
+    const a = mgr.getView(root, st, 0);
+    assert.equal(a.refreshing, false, '冷开（rebuild 0）不该标 refreshing');
+    assert.ok(a.payload.nodes.length > 0, '冷开就要给出完整结构——store 里本来就有');
+    const b = mgr.getView(root, st, 0);
+    assert.equal(b.payload, a.payload, '缓存命中要回同一份 payload，不重算');
+    // 绕过 hub 直接写请求（closeRequest/appendRequest 那条路）：内联补，当场新鲜，不派 worker
+    appendRequest(dir, { text: '后台刷新测试的一条请求' });
+    const c = mgr.getView(root, st, 0);
+    assert.equal(c.refreshing, false, '人写层变化不该派后台 worker');
+    assert.equal(c.payload.meta.requestsPending, 1, '绕过 hub 写请求也要当场看得见');
+    // 模型层变化：先回上一次真实构建 + refreshing=true，后台 worker 重算后原子换缓存
+    const ledgerFile = `${dir}/ledger.json`;
+    const led = JSON.parse(fs.readFileSync(ledgerFile, 'utf8'));
+    const oldBuiltAt = led.builtAt;
+    led.builtAt = new Date(Date.parse(oldBuiltAt) + 60000).toISOString();
+    fs.writeFileSync(ledgerFile, JSON.stringify(led));
+    const d = mgr.getView(root, st, 0);
+    assert.equal(d.refreshing, true, '模型层一变就要标 refreshing，交后台重算');
+    assert.equal(d.payload.meta.builtAt, oldBuiltAt, '后台没算完前先回上一次真实构建，前台不阻塞');
+    let e = d;
+    for (let i = 0; i < 150 && e.refreshing; i++) { await new Promise((r) => setTimeout(r, 20)); e = mgr.getView(root, st, 0); }
+    assert.equal(e.refreshing, false, '后台重算要在有限时间内完成');
+    assert.equal(e.payload.meta.builtAt, led.builtAt, '算完后缓存要原子换成新构建');
+  } finally { mgr.stop(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('懒建账契约：廉价画像不调 libraryOf、打开即建占位、未建账标灰、画布认 building（PRD-load）', async () => {
+  // 静态：画像扫描廉价化（criterion 5）——只读已建账 ledger 头＋stat，不跑 outstandingFor、不扫宿主目录。
+  const profSrc = fs.readFileSync(new URL('../src/profile-auto.mjs', import.meta.url), 'utf8');
+  // 判据是「不 import/调用」，注释里解释为什么不调它不算违规——只查真的 import 与调用。
+  assert.ok(!/import\s+[^;]*\blibraryOf\b/.test(profSrc) && !/\blibraryOf\s*\(/.test(profSrc), 'profileDue 不许 import/调用 libraryOf（那会逐会话 outstandingFor）');
+  assert.ok(!/listSessions|sourceIndex/.test(profSrc), 'profileDue 不扫宿主源目录，只读已建账 ledger');
+  assert.match(profSrc, /ledger\.json/, '廉价画像扫描读每个已建账 ledger.json');
+  assert.match(profSrc, /source\.jsonl/, 'lastWriteAt 回落归档，与 library.statusOf 同一条链');
+
+  // 静态：Stop 顺序契约＋活跃集门控（criterion 6）——收尾/补账组装在画像之前。
+  const hookSrc = fs.readFileSync(new URL('../hooks/ledger-brief.mjs', import.meta.url), 'utf8');
+  const iClose = hookSrc.indexOf('closeoutFor(sid, input.transcript_path');
+  const iSum = hookSrc.indexOf('summariseFor(sid, input.transcript_path');
+  const iProf = hookSrc.indexOf('profileDue(STORE)');
+  assert.ok(iClose > -1 && iSum > -1 && iProf > -1, 'Stop 组装要含收尾/补账/画像三段');
+  assert.ok(iClose < iProf && iSum < iProf, '当前会话先收尾/补账、后画像（顺序契约）');
+  assert.match(hookSrc, /function currentIsLive/, 'Stop 补账要有活跃集门控');
+  assert.match(hookSrc, /idle-session/, 'idle 当前会话跳过补账催办');
+
+  // 静态：未建账廉价条目＋默认 store 守卫（criterion 3）。
+  const libSrc = fs.readFileSync(new URL('../src/library.mjs', import.meta.url), 'utf8');
+  assert.match(libSrc, /built: false/, '未建账条目标 built:false');
+  assert.match(libSrc, /organize: null/, '未建账条目不算整理度');
+  assert.match(libSrc, /isDefaultStore\(root\)/, '只有默认 store 才扫宿主列未建账（夹具关得住真机）');
+
+  // 静态：画布处理 building 占位（criterion 7）。
+  const atlasSrc = fs.readFileSync(new URL('../web/atlas.js', import.meta.url), 'utf8');
+  assert.match(atlasSrc, /v\.meta\.building/, '画布要认 building 占位，不 adopt 空图');
+  assert.match(atlasSrc, /正在建账/, 'building 时显示正在建账骨架');
+
+  // 行为：打开未建账会话＝后台建账＋占位，建完出真视图（criterion 4）。
+  const { createRefresh } = await import('../src/refresh.mjs');
+  const root = fixture('load-open');
+  const srcDir = `${root}/host`;
+  fs.mkdirSync(srcDir, { recursive: true });
+  const sid = 'opensession0001';
+  const src = `${srcDir}/${sid}.jsonl`;
+  fs.writeFileSync(src, headLines(FILE, 262144).join('\n') + '\n');
+  const dir = `${root}/${sid}`;
+  const mgr = createRefresh();
+  const st = { dir, id: sid, sourceFile: src, lastError: null };
+  try {
+    const a = mgr.getView(root, st, 0);
+    assert.equal(a.payload.meta.building, true, '冷开无 ledger 要回 building 占位');
+    assert.equal(a.refreshing, true, '占位标 refreshing，前台转圈不阻塞');
+    assert.deepEqual(a.payload.steps, [], '占位是空结构，前台不崩');
+    assert.ok(!fs.existsSync(`${dir}/ledger.json`), '主线程绝不内联 build');
+    let v = a;
+    for (let i = 0; i < 250 && v.payload.meta.building; i++) { await new Promise((r) => setTimeout(r, 20)); v = mgr.getView(root, st, 0); }
+    assert.ok(fs.existsSync(`${dir}/ledger.json`), 'worker 要把账建出来落盘');
+    assert.ok(!v.payload.meta.building, '建完不再标 building');
+    assert.ok(v.payload.nodes.length > 0, '建完出真视图');
+  } finally { mgr.stop(); fs.rmSync(root, { recursive: true, force: true }); }
+});
+
+test('自动建账 sweep 三档：active 只建 live、off 一个不建、all 建全部，封顶 cap（PRD-load §2.2）', () => {
+  const base = fixture('load-sweep');
+  const home = `${base}/home`;
+  const projDir = `${home}/.qoder/projects/fixture`;
+  fs.mkdirSync(projDir, { recursive: true });
+  // opencode 适配器的根是 TOOL/out/opencode（不随 HOME 走）：用 CONVLEDGER_OPENCODE_OUT
+  // 指到空夹具目录，否则真机几十段投影会漏进 sweep 候选。
+  const ocEmpty = `${base}/oc-empty`;
+  fs.mkdirSync(ocEmpty, { recursive: true });
+  const body = headLines(FILE, 262144).join('\n') + '\n';
+  assert.ok(Buffer.byteLength(body) > 20000, '夹具源要 >20KB 才进 sweep 候选');
+  const liveSid = 'livesession0001', idleSid = 'idlesession0001';
+  fs.writeFileSync(`${projDir}/${liveSid}.jsonl`, body);
+  fs.writeFileSync(`${projDir}/${idleSid}.jsonl`, body);
+  const old = new Date(Date.now() - 40 * 60000);
+  fs.utimesSync(`${projDir}/${idleSid}.jsonl`, old, old);
+
+  // sweepJob 用 listSessions()（宿主根现在惰性读 *_CONFIG_DIR）：子进程把 HOME/USERPROFILE
+  // 与三个 *_CONFIG_DIR 全部指到夹具家、CONVLEDGER_OPENCODE_OUT 指到空目录。父进程可能带着
+  // 宿主注入的 WORKBUDDY_CONFIG_DIR=<真机目录>，不显式覆盖就会把真机几百段对话漏进候选。
+  const refreshUrl = pathToFileURL(`${tools}/src/refresh.mjs`).href;
+  const script = `${base}/sweep-probe.mjs`;
+  fs.writeFileSync(script, [
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    `import { createRefresh } from '${refreshUrl}';`,
+    "const [storeRoot, mode, cap] = process.argv.slice(2);",
+    "const mgr = createRefresh();",
+    "mgr.sweep(storeRoot, { mode, liveMin: 15, cap: Number(cap) });",
+    "await mgr.getStatus(storeRoot);",   // worker 串行：status 排在 sweep 后，resolve 即 sweep 已完成
+    "const built = fs.existsSync(storeRoot) ? fs.readdirSync(storeRoot).filter((d) => fs.existsSync(path.join(storeRoot, d, 'ledger.json'))) : [];",
+    "mgr.stop();",
+    "process.stdout.write(JSON.stringify({ built }));",
+  ].join('\n') + '\n');
+  const run = (mode, cap) => {
+    const storeRoot = `${base}/store-${mode}`;
+    fs.mkdirSync(storeRoot, { recursive: true });
+    const r = spawnSync(process.execPath, [script, storeRoot, mode, String(cap)], {
+      cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+      env: { ...process.env, HOME: home, USERPROFILE: home, CONVLEDGER_OPENCODE_OUT: ocEmpty,
+        QODER_CONFIG_DIR: `${home}/.qoder`, CLAUDE_CONFIG_DIR: `${home}/.claude`,
+        WORKBUDDY_CONFIG_DIR: `${home}/.workbuddy` },
+    });
+    assert.equal(r.status, 0, `sweep ${mode} 子进程退出 ${r.status}：${r.stderr}`);
+    return JSON.parse(r.stdout).built.sort();
+  };
+  try {
+    assert.deepEqual(run('off', 10), [], 'off 模式一个都不建');
+    assert.deepEqual(run('active', 1), [liveSid], 'active 只建 live 那段，idle 旧对话不建');
+    assert.deepEqual(run('all', 10), [idleSid, liveSid].sort(), 'all 模式建全部未建账（旧行为）');
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
+test('Stop 活跃集门控：idle 旧会话不催补账，live 会话才进补账（PRD-load §2.5）', () => {
+  const base = fixture('load-idle');
+  const SID = 'idlesession0001';
+  const src = `${base}/projects/fixture/${SID}.jsonl`;
+  fs.mkdirSync(`${base}/projects/fixture`, { recursive: true });
+  // 用合成源，不切真实会话：那段 Qoder 会话开头 8KB 里带 convledger-internal 哨兵，
+  // hook 会把它当成「本工具自己派的后台会话」直接静默退出，永远走不到 idle 门控。
+  fs.writeFileSync(src, synthLines(SID, 8, 'D:/fixture/idle'), 'utf8');
+  const store = `${base}/store`;
+  fs.mkdirSync(`${store}/${SID}`, { recursive: true });
+  // 没有 cwd → closeoutFor 跳过（no-cwd），正好落到补账门控那一段；segments 空 → 无综述欠项。
+  fs.writeFileSync(`${store}/${SID}/ledger.json`, JSON.stringify({ sessionId: SID, runner: 'qoder', sourceFile: src, segments: [] }));
+  const env = { ...process.env, QODER_CONFIG_DIR: base, WORKBUDDY_CONFIG_DIR: `${base}/nowb`, CONVLEDGER_HOOK_STORE: store, CONVLEDGER_HOOK_LOG: `${base}/log.jsonl` };
+  const hook = () => spawnSync(process.execPath, ['hooks/ledger-brief.mjs'], {
+    cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env,
+    input: JSON.stringify({ hook_event_name: 'Stop', session_id: SID, transcript_path: src, cwd: 'D:/fixture/idle', stop_hook_active: false }),
+  });
+  const lastReason = () => {
+    const rows = fs.readFileSync(`${base}/log.jsonl`, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    return rows[rows.length - 1].reason ?? '';
+  };
+  try {
+    const old = new Date(Date.now() - 40 * 60000);
+    fs.utimesSync(src, old, old);
+    const idle = hook();
+    assert.equal(idle.status, 0, idle.stderr);
+    assert.equal(idle.stdout, '', 'idle 旧会话不该催补账');
+    assert.match(lastReason(), /idle-session/, 'idle 当前会话要标明跳过补账');
+
+    const now = new Date();
+    fs.utimesSync(src, now, now);
+    const live = hook();
+    assert.equal(live.status, 0, live.stderr);
+    assert.ok(!/idle-session/.test(lastReason()), 'live 会话不该被 idle 门控挡下');
+  } finally { fs.rmSync(base, { recursive: true, force: true }); }
+});
+
 test('hub：一个端口服务所有会话，/health 只报 hub，同端口不重复起', async () => {
   // 单独一条：上面那条走的是正文/闸门，它红在成本上时不该把 hub 语义一起埋掉。
   const root = fixture('map-port');
@@ -521,13 +887,15 @@ test('hub：一个端口服务所有会话，/health 只报 hub，同端口不�
   fs.mkdirSync(`${root}/other-session-0001`, { recursive: true });
   fs.writeFileSync(`${root}/other-session-0001/ledger.json`, JSON.stringify({ sessionId: 'other-session-0001', sourceFile: `${otherRoot}/gone.jsonl`, cwd: 'D:/elsewhere', segments: [] }));
 
-  const get = (port, path) => new Promise((res, rej) => {
-    http.get({ host: '127.0.0.1', port, path }, (x) => {
+  let hubKey = null;
+  const get = (port, path, extra = {}) => new Promise((res, rej) => {
+    http.get({ host: '127.0.0.1', port, path, headers: { ...(hubKey ? { 'x-hub-key': hubKey } : {}), ...extra } }, (x) => {
       let b = ''; x.on('data', (d) => { b += d; }); x.on('end', () => res({ status: x.statusCode, body: b, headers: x.headers }));
     }).on('error', rej);
   });
 
   const h = await serveMap({ root, port: 8792, rebuildSec: 0 });
+  hubKey = h.token;
   try {
     const health = JSON.parse((await get(8792, '/health')).body);
     // 少一个字段，复用判定就会认错人——这些是 hub 协议的接口，不是展示文案
@@ -536,6 +904,19 @@ test('hub：一个端口服务所有会话，/health 只报 hub，同端口不�
     assert.equal(health.port, 8792);
     assert.equal(health.pid, process.pid);
     assert.equal(health.session, undefined, '/health 不报会话——会话由路径决定');
+
+    // 门禁钥匙要单独落盘：hub.json 退出时会删，token 跟着没就会每次重启换钥匙、老窗口转圈。
+    const tokenFile = path.join(path.dirname(root), 'hub-token');
+    assert.equal(fs.readFileSync(tokenFile, 'utf8').trim(), h.token, 'token 必须写进 out/hub-token');
+    // 老窗口带着上一任 cookie 再访问 ?k=新钥匙：必须覆盖 cookie，否则 /app.js 继续 403。
+    const stale = await get(8792, `/app?k=${h.token}`, { cookie: `hubk=${'0'.repeat(48)}` });
+    assert.match(String(stale.headers['set-cookie'] || ''), new RegExp(`hubk=${h.token}`),
+      '带 ?k= 的响应要刷新旧 cookie');
+    // setup 侧也要优先读专用钥匙文件
+    assert.match(fs.readFileSync(new URL('../src/setup.mjs', import.meta.url), 'utf8'), /'out', 'hub-token'/,
+      'readHubToken 先读 out/hub-token');
+    // app.js 被门禁挡住时，启动页不能永远一个样子
+    assert.match(fs.readFileSync(new URL('../web/app.html', import.meta.url), 'utf8'), /连接超时/, '启动页要有时限提示');
 
     const self = JSON.parse((await get(8792, `/s/${ledger.sessionId}/health`)).body);
     assert.equal(self.session, ledger.sessionId, '/s/<id>/health 必须报出这段会话的 id');
@@ -549,7 +930,7 @@ test('hub：一个端口服务所有会话，/health 只报 hub，同端口不�
     assert.equal(other.session, 'other-session-0001', '同一端口要能同时服务第二段会话');
 
     // 项目任务入口：/p/<键>/ 只读页 + /projects.json 清单（与会话用同一套 Host 限制）
-    const pkey = 'p-abcdefabcdef';
+    const pkey = projectKey(built.ledger.cwd);
     const pst = createState(pkey);
     pst.milestones.push({ id: 'PM001', short: '夹具', title: '夹具', goal: '', scopeBasis: { kind: 'approved-plan' } });
     pst.tasks.push({
@@ -561,6 +942,8 @@ test('hub：一个端口服务所有会话，/health 只报 hub，同端口不�
     writeState(root, pkey, pst);
     const plist = JSON.parse((await get(8792, '/projects.json')).body);
     assert.ok(plist.projects.some((p) => p.key === pkey), '/projects.json 没列出有任务状态的项目');
+    assert.ok(Array.isArray(plist.rootKeys) && plist.rootKeys.includes(pkey), '/projects.json 要把根项目键带给架构路线图');
+    assert.ok(plist.membersByKey && pkey in plist.membersByKey, '/projects.json 要保留每个项目的会话成员表');
     const ppage = await get(8792, `/p/${pkey}/`);
     assert.equal(ppage.status, 200);
     assert.match(ppage.body, /夹具任务/, '项目页要带出任务');
@@ -577,14 +960,29 @@ test('hub：一个端口服务所有会话，/health 只报 hub，同端口不�
     assert.match(ppage.body, /id="insights"/, '项目页要有经验与画像的位置');
     assert.match(ppage.body, /经验 · 按阶段/, '经验块要按阶段收拢');
     assert.match(ppage.body, /用户画像 · 做事方式/, '画像块要标明它是什么');
+    assert.match(ppage.body, /维度覆盖/, '画像卡要显示目标/边界/验收等维度覆盖');
     const pdata = JSON.parse((await get(8792, `/p/${pkey}/data.json`)).body);
     assert.ok('live' in pdata, '项目页 data.json 必须带会话实时，而不只是任务模型');
     assert.ok('insights' in pdata, 'data.json 必须带经验与画像，5 秒轮询才能刷新');
     assert.ok(pdata.insights && Array.isArray(pdata.insights.experience.groups), '经验要有分组结构');
     assert.ok(pdata.insights.profile && pdata.insights.profile.project && pdata.insights.profile.user, '画像要带两张表的条目');
-    assert.equal(pdata.live.ok, false, '夹具项目没有对应会话时如实为空，不编步号');
+    assert.ok(pdata.live.ok && pdata.live.members >= 1, '有会话的项目要带出成员');
     assert.equal((await get(8792, `/p/${pkey}/data.json`)).status, 200);
     assert.equal((await get(8792, '/p/p-000000000000/')).status, 404);
+    const noSessionKey = 'p-000000000001';
+    writeState(root, noSessionKey, createState(noSessionKey));
+    const noSessionData = JSON.parse((await get(8792, `/p/${noSessionKey}/data.json`)).body);
+    assert.equal(noSessionData.live.ok, false, '没有对应会话的项目如实为空，不编步号');
+    // 有会话、但还没跑过收尾的项目：给一个可读的空状态页，而不是纯文本 404
+    const emptyKey = projectKey('D:/elsewhere');
+    const ep = await get(8792, `/p/${emptyKey}/?from=${encodeURIComponent(`/s/${ledger.sessionId}/`)}`);
+    assert.equal(ep.status, 200, '有会话但没任务状态的项目必须返回可读页面，不是裸 404');
+    assert.match(ep.body, /还没有任务状态/, '空状态页要说清为什么空');
+    assert.match(ep.body, /sync --prepare/, '空状态页要给生成任务状态的命令');
+    assert.match(ep.body, /back-session/, '空状态页也要有回会话的入口');
+    assert.match(ep.body, /打开会话库/, '空状态页要能回会话库');
+    assert.match(ep.body, /\/s\/other-session-0001\//, '空状态页要能点进项目里的会话');
+    assert.equal((await get(8792, '/p/p-000000000000/')).headers['content-type'].includes('text/html'), true, '未知项目也要给带导航的 HTML');
 
     const again = await serveMap({ root, port: 8792, rebuildSec: 0 });
     assert.equal(again.reused, true, 'hub 已在同一端口上跑着却不复用——那会让一次会话开出第二个服务');
@@ -975,11 +1373,11 @@ test('块层：星图和 convledger steps 读同一份块表，每块都能被�
   }
 
   // ⑤ 页面之外那份入口：CLI 的 --json 必须就是同一份 steps，行文本必须数得出同一批块
-  const j = JSON.parse(execFileSync(process.execPath, [cli, 'steps', '--json', '--store', root, '--session', ledger.sessionId], { encoding: 'utf8' }));
+  const j = JSON.parse(execFileSync(process.execPath, [cli, 'steps', '--json', '--store', root, '--session', ledger.sessionId], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
   assert.equal(j.length, steps.length, `CLI 打了 ${j.length} 块，页面拿到的 payload 有 ${steps.length} 块`);
   assert.deepEqual(j.map((s) => s.step), steps.map((s) => s.step), 'CLI 和星图对"第几步"的答案不一样——步号只能有一份');
   assert.deepEqual(j.map((s) => s.read), steps.map((s) => s.read), 'CLI 和星图给的回读命令不一样');
-  const text = execFileSync(process.execPath, [cli, 'steps', '--store', root, '--session', ledger.sessionId], { encoding: 'utf8' });
+  const text = execFileSync(process.execPath, [cli, 'steps', '--store', root, '--session', ledger.sessionId], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   const rows = text.trim().split('\n');
   assert.equal(rows.length, steps.length + 2, `steps 打了 ${rows.length} 行，块有 ${steps.length} 块（首行是总数、末行是提示）`);
   // 成本按"每块多少 token"断言：绝对数会随会话变长自然增长，那不是回归
@@ -1045,11 +1443,12 @@ test('块层：星图和 convledger steps 读同一份块表，每块都能被�
       assert.ok(s.gist, `块 ${s.i} 没有综述也没有派生标题`);
       assert.equal(s.gistFrom, '', `块 ${s.i} 没有模型综述，却报原话出处 ${s.gistFrom}`);
       assert.equal(s.gistDerived, true, `块 ${s.i} 没有模型综述，标题必须标成派生`);
-      // 没有综述时只按产物与结构派生，绝不拿用户原话当标题（2026-11-09 用户口径：
-      // 每块都该有总结；复读当作标题是 bug）。页面标「无模型综述 · 标题按产物与结构生成」。
-      assert.equal(s.gistIsAsk, false, `块 ${s.i} 仍把标题标成取自你的要求`);
-      if (first) {
-        assert.ok(!first.say.startsWith(s.gist), `块 ${s.i} 的标题是用户原话的截断：「${s.gist}」`);
+      // 没有综述时：标题直接显示原文截断（真人原话），画布层再标「待补综述」——
+      // 2026-11-13 用户口径，推翻 2026-11-09 的「绝不用原话当标题」。
+      if (first && first.say) {
+        const lead = String(s.gist).replace(/…$/, '');
+        assert.ok(first.say.includes(lead) || first.say.slice(0, 10) === lead.slice(0, 10),
+          `块 ${s.i} 的标题应是原话截断：「${s.gist}」`);
       }
     }
   }
@@ -1063,12 +1462,21 @@ test('块层：星图和 convledger steps 读同一份块表，每块都能被�
   assert.match(html, /class="nav"/, '顶栏的视图切换要独立成组');
   assert.match(html, /class="acts"/, '顶栏的画布操作要独立成组');
   assert.match(css, /grid-template-areas/, '顶栏要用网格排布，不能靠换行碰运气');
+  assert.match(html, /classList\.add\('embed'\)/, '画布要能按 embed=1 隐藏第二层 chrome');
+  assert.match(css, /body\.embed #lib/, '嵌入 App 时画布左栏会话清单要让位，整屏只有一套导航');
+  assert.match(css, /body\.embed header/, '嵌入时顶栏要收成一条功能控件，不再重复品牌与视图 tab');
   assert.match(js, /freshTitle/, '同步状态要留完整时间在悬停提示里');
   assert.match(js, /orgfull|orgpart/, '画布左栏要标出这段整理过没有');
   assert.match(css, /\.librow\.current\s*\{\s*background:\s*transparent/, '当前会话不能单独铺一块底，行样式要和其它会话一致');
   assert.match(css, /\.librow\s*\{[^}]*width:\s*100%/, '会话行必须显式满宽，链接元素不能收缩成内容宽度');
   assert.match(css, /header \.live::before/, '顶栏同步点必须限定在 header，不能漏到会话行');
   assert.ok(!/\.librow\.live/.test(css), '会话行的 live 类不能和顶栏 .live 撞名');
+  // 后台重算时前台转小圈、不冻结（PRD-refresh）：同步点变转圈，文字写明正在更新
+  assert.match(js, /function liveSync/, '画布同步状态要按 refreshing 切换转圈');
+  assert.match(js, /正在更新最新信息/, '后台重算时画布要写明正在更新最新信息');
+  assert.match(css, /header \.live\.refreshing::before/, '同步点要能在重算时变成转圈');
+  assert.match(css, /@keyframes livespin/, '转圈动画要有 keyframes');
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s*header \.live\.refreshing::before \{ animation: none/, '减少动态时转圈要停');
   assert.match(js, /' is-live'/, '会话行要用独立的 is-live 类');
   assert.match(js, /convledger\.groups\.order/, 'agent 分组顺序要持久化到本机');
   assert.match(js, /dragstart/, '分组标题要能拖动');
@@ -1083,17 +1491,44 @@ test('块层：星图和 convledger steps 读同一份块表，每块都能被�
   assert.match(web('hub.css'), /\.gh \.grip/, '会话库的分组标题也要有拖动手柄');
   assert.match(js, /qfmodel: 'Qwen3\.8-Flash'/, '模型代号 qfmodel 要翻成可读名称');
   assert.match(js, /dfmodel: 'DeepSeek-Flash'/, '模型代号 dfmodel 要翻成可读名称');
-  // 没有综述时标题按产物派生，页面必须标明它不是综述——payload 少带一个标记，卡片就说谎
+  // 没写综述的块：标题显示原文截断（真人原话），但仍要标「待补综述」——用户口径：描述还是得有
   assert.match(js, /gistIsAsk: !!s\.gistIsAsk/, '画布要把"标题取自你的要求"带进每块');
-  assert.match(js, /无模型综述 · 标题按产物与结构生成/, '派生标题必须标明它不是综述');
+  assert.match(js, /待补综述/, '没综述的块仍要标「待补综述」');
+  assert.ok(!/讨论过，没有落产物/.test(fs.readFileSync(`${tools}/src/view.mjs`, 'utf8')), '别再拿「讨论过，没有落产物」当统一标题');
+  assert.ok(!/待补综述/.test(fs.readFileSync(`${tools}/src/view.mjs`, 'utf8')), '标题不用「待补综述」占位——用原话截断（标注在画布层）');
+  assert.match(fs.readFileSync(`${tools}/src/view.mjs`, 'utf8'), /\(s\.say && String\(s\.say\)\.trim\(\)\)/, '没综述时标题用真人原话截断');
+  assert.match(js, /pending: !!s\.pending/, '画布要拿到待补综述标记');
+  assert.match(js, /' pending'/, '待补的块要带可辨识的类');
+  assert.match(css, /\.p\.pending::before/, '待补综述要有可见的角标');
+  assert.match(js, /p\.gist \|\| p\.mark/, '远景先给标题，不拿用户原话的截段当卡面');
   assert.ok(!/你的要求 · 还没有块综述/.test(js), '没有综述时不许把用户原话当标题');
-  // 补账档位：画布顶栏可切三档，hub 提供本机级读写，hook 按档位决定拦不拦
-  assert.match(html, /id="cadence"/, '画布顶栏要有补账档位');
-  assert.match(html, /<option value="each">[\s\S]*value="every5"[\s\S]*value="compact"/, '补账档位要有每轮/每5轮/压缩时三档');
+  // 档位开关不再放在地图里；统一挪到看板设置页，按 Agent 分行控制收尾与补账
+  assert.doesNotMatch(html, /id="(cadence|closeoutCadence|profileCadence|autoBuild)"/, '地图顶栏不再放档位开关');
+  const appHtml = web('app.html');
+  const appJs = web('app.js');
+  assert.match(appHtml, /id="agents"/, '节奏开关要放进本机 Agent 卡片区');
+  assert.match(appHtml, /id="prefProfile"/, '画像档位要留在看板');
+  assert.match(appHtml, /id="prefAutoBuild"/, '建账档位要留在看板');
+  assert.match(appJs, /acadence/, '每个 Agent 卡片里要有节奏开关');
+  assert.match(appJs, /closeoutCadence/, '卡片要能写收尾档位');
+  assert.match(appJs, /summaryCadence/, '卡片要能写补账档位');
+  assert.match(appJs, /setHostPref/, 'Agent 级开关要写到 hosts.<runner>');
+  assert.doesNotMatch(appHtml, /Agent 节奏/, '模型配置页不再放节奏设置');
   assert.match(fs.readFileSync(new URL('../src/map.mjs', import.meta.url).pathname.replace(/^\/(\w:)/, '$1').replace(/\\/g, '/'), 'utf8'),
-    /url === '\/prefs'/, 'hub 要能写补账档位');
+    /url === '\/prefs'/, 'hub 要能写档位');
   assert.match(fs.readFileSync(new URL('../hooks/ledger-brief.mjs', import.meta.url).pathname.replace(/^\/(\w:)/, '$1').replace(/\\/g, '/'), 'utf8'),
     /summariseFor\(/, 'Stop hook 要按档位触发补综述');
+  // 品牌图标：盒子和文字同一条中线，大小跟着字走；不能靠 baseline 微调悬在半空
+  assert.match(css, /\.brandline \{[^}]*align-items: center/, '品牌图标要和英文名同一条中线');
+  assert.match(css, /\.brandmark \{[^}]*width: 24px/, '品牌图标不能小到看不清');
+  assert.match(web('hub.css'), /\.brand \{[^}]*align-items: center/, '会话库的品牌图标也要对齐');
+  // 大会话首屏：数据没到之前要画骨架，不能留一片点阵让用户等
+  assert.match(html, /id="bootskel"/, '大账本首屏要有载入占位');
+  assert.match(js, /getElementById\('bootskel'\)/, '数据到了要撤掉载入占位');
+  assert.match(js, /\/health'\)\.then/, '占位要先用 health 报段数，不等 data.json');
+  assert.match(html, /class="libskel"/, '会话清单加载中要有骨架行');
+  assert.match(fs.readFileSync(new URL('../hooks/ledger-brief.mjs', import.meta.url).pathname.replace(/^\/(\w:)/, '$1').replace(/\\/g, '/'), 'utf8'),
+    /profileDue\(/, 'Stop hook 要按画像档位触发补画像');
   assert.match(js, /未划阶段/, '整段没有阶段时不能把第 1 步叫尾段');
   // 首屏必须落在读得出字的一档：以前第一次打开就是 fit() 的 12% 全图，满屏编号没有内容
   assert.match(js, /function openLatest/, '首屏要有一个落在可读档的镜头');
@@ -1105,6 +1540,8 @@ test('块层：星图和 convledger steps 读同一份块表，每块都能被�
     const pp = fs.readFileSync(`${tools}/src/project-page.mjs`, 'utf8');
     assert.match(pp, /只画声明了依赖的/, '依赖图只画少数任务时要说清其余没声明依赖，别让读者以为图丢了内容');
     assert.match(pp, /\.\.\.\(c\.cancelled \? \[\['已取消', c\.cancelled\]\] : \[\]\)/, '计数行要认「已取消」，否则与图上的已取消节点对不上数');
+    assert.match(pp, /classList\.add\('embed'\)/, '工作台要能按 embed=1 隐藏自己的页头');
+    assert.match(pp, /body\.embed \.bar \.zoom\{margin-left:0\}/, '嵌入时工作台只留缩放控件，品牌/返回/会话库让位给 App 外壳');
   }
   assert.match(js, /function modelLabel/, '顶栏渲染前要走模型名称映射');
   assert.match(js, /mtag/, '当前模型要有「当前」徽标');
@@ -1114,6 +1551,14 @@ test('块层：星图和 convledger steps 读同一份块表，每块都能被�
   assert.match(js, /convledger\.lib\.open/, '画布左栏要记住哪组是展开的');
   assert.match(js, /agdot/, '每个 agent 的名字前要有自己的色标');
   assert.match(js, /展开全部/, '折叠时要给展开入口');
+  assert.match(js, /var LIB_SHOW = 3;/, '侧栏每组合默认只列三段，别一上来就铺五行');
+  // 小字号可读性：中文优先雅黑 UI，说明行不小于 12px（11px 在暗色卡上发虚）
+  assert.match(css, /--ui:[\s\S]*?Microsoft YaHei UI[\s\S]*?Noto Sans SC/, '中文字体要优先雅黑 UI，别先落 Noto');
+  assert.match(css, /\.pnone \{[^}]*font-size: 12px/, '卡片说明行不能小于 12px');
+  // 放大发虚的根因：世界层常驻 will-change 会按 1× 栅格化再放大
+  assert.ok(!/#world\s*\{[^}]*will-change: transform/.test(css), '世界层不能常驻 will-change，否则放大后字发虚');
+  assert.match(js, /willChange = 'auto'/, '停手后要收回图层，让浏览器按当前倍率重画');
+  assert.match(web('hub.css'), /"Microsoft YaHei UI"/, '会话库也要用同一套中文字体');
   assert.match(web('hub.js'), /convledger\.hub\.open/, '根会话库同样要记住展开状态');
   // 中景不聚合：阶段信息只在顶部括号，块保持一小块一小块
   assert.match(css, /\/\* 中景不做阶段聚合/, '中景阶段聚合没有停掉');
@@ -1135,9 +1580,12 @@ test('块层：星图和 convledger steps 读同一份块表，每块都能被�
   const padH = Number(css.match(/\.pin\s*\{[^}]*padding:\s*([\d.]+)px\s+([\d.]+)px/)[2]);
   const fsz = Number(css.match(/\.fwhat\s*\{[^}]*font-size:\s*(\d+)px/)[1]);
   const inner = cw - 2 - 2 * padH;   // border-box：减去 1px 边框和左右内边距
-  assert.ok(CLAIM_MARK_W * fsz <= inner,
-    `${CLAIM_MARK_W} 格 × ${fsz}px = ${CLAIM_MARK_W * fsz}px 比远景卡内宽 ${inner}px 还宽——最后一个字会被裁掉`);
-  for (const s of steps) assert.ok(wlen(s.mark) * fsz <= inner, `块 ${s.i} 的题「${s.mark}」在远景放不下`);
+  // 远景现在给的是标题（gist），两行；预算按两行算，不再拿原话截段
+  const flines = Number(css.match(/\.fwhat\s*\{[^}]*-webkit-line-clamp:\s*(\d+)/)[1]);
+  const fperLine = Math.floor(inner / fsz);
+  assert.ok(fperLine * flines >= BLOCK_GIST_W,
+    `远景 ${flines} 行只放得下 ${fperLine * flines} 格，比标题预算 ${BLOCK_GIST_W} 窄——最后一个字会被裁掉`);
+  for (const s of steps) assert.ok(wlen(s.gist) <= fperLine * flines, `块 ${s.i} 的题「${s.gist}」在远景放不下`);
   // 中景那一行同理：预算就是那两行放得下的字数，超出的字会被 line-clamp 静默裁掉
   const mfsz = Number(css.match(/\.mtitle\s*\{[^}]*font-size:\s*(\d+)px/)[1]);
   const mlines = Number(css.match(/\.mtitle\s*\{[^}]*-webkit-line-clamp:\s*(\d+)/)[1]);
@@ -1155,7 +1603,7 @@ test('块层：星图和 convledger steps 读同一份块表，每块都能被�
     'centerOn 没先把目标档落地就量坐标——跨档居中会偏');
   assert.ok(/S\.before = \{ x: S\.tgt\.x, y: S\.tgt\.y, z: S\.tgt\.z, tier: S\.tier \}/.test(js)
     && /if \(!silent && S\.before\)/.test(js), '钻进前没记镜头或关闭时不还原：Esc 会把人丢在别处');
-  assert.ok(/'fwhat', p\.mark/.test(js) && /'msrc'/.test(js),
+  assert.ok(/'fwhat', p\.gist \|\| p\.mark/.test(js) && /'msrc'/.test(js),
     '远景卡上没有"这块的题"，或中景摘要没带出处段号——回读链就断了');
 
   // ⑦b 流程图契约：连线只有三种走法（主线/岔出/汇回），全部正交折线＋箭头；
@@ -1325,7 +1773,9 @@ test('块层：星图和 convledger steps 读同一份块表，每块都能被�
   assert.match(blockInsp, /这一步在做/, '任务行没说明这一块的主线任务在做什么');
   assert.match(js, /未划入阶段（尾段/, '尾段块没标清它还没划入阶段');
   assert.match(blockInsp, /模型综述（归纳，不过六条判据） · 依据 '/, '右栏没标清那是模型综述及其依据段');
-  assert.match(blockInsp, /这块还没有模型综述（convledger digest --block '/, '块没有综述时没当面说清——读者会把回落当成编造');
+  assert.ok(!/这块还没有模型综述/.test(blockInsp), '没综述的块不再写「还没有模型综述」——改标「待补综述」+ 原文截断');
+  assert.match(blockInsp, /待补综述 · 以上「我的要求」是原文截断/, '没综述时右栏要标「待补综述」并说明是原文截断');
+  assert.match(blockInsp, /askRaw \? \(askRaw\.length > 140/, '没综述时右栏用真人原话截断，不空着');
   assert.match(js, /sum: s\.sum \|\| null, sumFrom: s\.sumFrom \|\| ''/, 'partsOf 没把综述带进页面，右栏只会永远回落成原话');
   assert.match(js, /'msrc', '模型综述 · 依据 ' \+ p\.sumFrom/, '中景卡没把出处标成「模型综述 · 依据 Sxx」');
   assert.match(js, /p\.sum \? p\.sum\.done : p\.solved/, '中景卡底还在用规则层的 solved，而不是综述的 done');
@@ -1376,7 +1826,8 @@ test('链路自检：缺综述、题名、尾段阶段都列出来', () => {
 // 四道闸门都必须能独立挡人：原话截段、编没见过的名字、超字数、旧锚点。
 test('块综述层：模型归纳走四道闸门，原话截段与旧锚点都被挡在外面', () => {
   const root = fixture('summaries');
-  const dir = writeStore(root, built);
+  const synth = synthStore();                    // 自带夹具：不依赖本机那段会话恰好写了什么
+  const dir = writeStore(root, synth.built);
   const tableFile = `${dir}/summaries.json`;
   fs.rmSync(tableFile, { force: true });          // 上一次跑留下的表会让"没有综述就回落"的断言失真
   const v = readView(dir);
@@ -1518,7 +1969,8 @@ test('没有阶段表时按真人提问切块；写下第一份阶段后块不�
 test('阶段层：模型划边界，工具核覆盖/锚点/反截段，旧锚点整条丢弃', () => {
   const base = fixture('phases');
   const docsRoot = `${base}/docs`;
-  const dir = writeStore(`${base}/store`, built);
+  const synth = synthStore();
+  const dir = writeStore(`${base}/store`, synth.built);
   const tableFile = `${dir}/phases.json`;
   fs.rmSync(tableFile, { force: true });
   fs.rmSync(docsRoot, { recursive: true, force: true });
@@ -1615,7 +2067,7 @@ test('brief：阶段摘要照抄、尾段如实空着、预算封顶、六格逐
   const M = v.mainSteps;
   assert.ok(M >= 4, `主线只有 ${M} 步，尾段与块表没法测`);
   const sid = ledger.sessionId.slice(0, 8);
-  const cli = (args) => spawnSync(process.execPath, ['src/cli.mjs', ...args, '--store', `${base}/store`, '--session', sid], { cwd: tools, encoding: 'utf8' });
+  const cli = (args) => spawnSync(process.execPath, ['src/cli.mjs', ...args, '--store', `${base}/store`, '--session', sid], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
 
   const doing = '先把账本骨架和命令行出口立起来，后面所有判断都挂在这套账上';
   const state = '骨架已经能出每一段的账';
@@ -1682,7 +2134,8 @@ test('brief：阶段摘要照抄、尾段如实空着、预算封顶、六格逐
 // 这一条同时钉住三件事：边界必须落在阶段边界上、九格过同一套反编造闸门、注入真的变小了。
 test('章层：边界跟着阶段走、九格过闸门、brief 换成章模式且真的更短', () => {
   const base = fixture('chapters');
-  const dir = writeStore(`${base}/store`, built);
+  const synth = synthStore();
+  const dir = writeStore(`${base}/store`, synth.built);
   const docsRoot = `${base}/docs`;
   fs.rmSync(`${dir}/chapters.json`, { force: true });
   fs.rmSync(docsRoot, { recursive: true, force: true });
@@ -1786,7 +2239,7 @@ test('章层：边界跟着阶段走、九格过闸门、brief 换成章模式�
   assert.match(briefText(v4, []), /^  做了：/m, '章失效后 brief 没退回阶段模式');
 
   // CLI：与模块同文；空表/越界都要如实退出
-  const sid = ledger.sessionId.slice(0, 8);
+  const sid = synth.ledger.sessionId.slice(0, 8);
   const cli = (args, input) => spawnSync(process.execPath, ['src/cli.mjs', ...args, '--store', `${base}/store`, '--session', sid],
     { cwd: tools, encoding: 'utf8', input });
   writeChapters(dir, { chapters: two.rows });
@@ -1814,6 +2267,19 @@ const storeDirOf = (root) => {
   assert.equal(hit.length, 1, `${root} 里应该有且只有一个账本，实际 ${hit.length} 个`);
   return `${root}/${hit[0].name}`;
 };
+
+test('brief 章太多：先保尾部与协作，再从最旧省章，总预算不超', () => {
+  const mk = (n, i) => ({ n, from: i * 8 + 1, to: (i + 1) * 8, fromBlock: i + 2, toBlock: i + 3, phaseSpan: `阶段 ${i + 1}`, short: `第${n}章`, goal: `第${n}章的目的` });
+  const ch = Array.from({ length: 60 }, (_, i) => mk(i + 1, i));
+  Object.assign(ch[59], { where: '最近一程做了什么', rules: '规则一', tasks: '任务一', walls: '碰壁一', cautions: '注意事项一', arch: '架构一', handoff: '接手一' });
+  const v = { meta: { session: 'fixture', segs: 320, cwd: 'D:/proj' }, steps: [], phases: [], mainSteps: 320, chapters: ch };
+  const text = briefText(v, [], [{ tag: '规则', text: '协作偏好一' }], { reserve: 500 });
+  assert.ok(tok(text) <= 1800, `brief 超预算：${tok(text)}`);
+  for (const k of ['走到哪：最近一程做了什么', '协作（这个人在这类事上要的，来自记忆）', '查法：', '第 60 章展开：', '前面 ']) {
+    assert.ok(text.includes(k), `尾部/省章提示缺 ${k}`);
+  }
+  assert.ok(!text.includes('章 1 · 第 1–8 步'), '预算不够时还硬塞最旧的章');
+});
 
 test('外挂表落盘前先按当前源重建：会话在 --put 之间长大了也不许当场过期', () => {
 
@@ -1848,21 +2314,25 @@ test('外挂表落盘前先按当前源重建：会话在 --put 之间长大了�
   fs.rmSync(base, { recursive: true, force: true });
 });
 
-if (isCalibration) {
-  test('calibration session: the six research subagents fired as one fan-out at turn 17', () => {
+// 下面三项钉的是「某一段特定历史会话（六个子代理在第 17 轮扇出、第一次压缩落在第几轮）」
+// 的手工核对表。那段会话还在长、内容会变，拿活的当基准就会时红时绿。
+// 要恢复只有一条路：把那段 jsonl 冻结成夹具并让 CALIBRATION 指向它。
+// 在冻结之前如实跳过，不假红也不假装通过。
+const CAL_SKIP = { skip: '需要冻结的校准会话快照：把那段 jsonl 存成夹具并让 CALIBRATION 指向它（详见下方注释）' };
+test('calibration session: the six research subagents fired as one fan-out at turn 17', CAL_SKIP, () => {
     const f = facts.fanouts.find((x) => x.turn === 17);
     assert.ok(f, 'turn 17 fan-out missing');
     const agent = f.calls.find((c) => c.name === 'Agent');
     assert.equal(agent.count, 6, `expected 6 parallel Agent calls, got ${agent?.count}`);
     assert.equal(facts.branches.hosts['17']?.length, 6, 'the six branches must hang back on turn 17');
   });
-  test('calibration session: the first compaction is the one the experiments measured', () => {
+test('calibration session: the first compaction is the one the experiments measured', CAL_SKIP, () => {
     const b = facts.boundaries[0];
     assert.equal(b.preTokens, 170947);
     assert.equal(b.messagesSummarized, 239);
     assert.equal(b.line, 389);
   });
-  test('calibration session: turn/tool totals and the mass table match the hand-counted answer key', () => {
+test('calibration session: turn/tool totals and the mass table match the hand-counted answer key', CAL_SKIP, () => {
     assert.equal(facts.boundaries[0].toolCallsBefore, 71, 'pre-boundary tool calls (P16 ground truth)');
     assert.ok(facts.turns.total >= 109);
     const b = facts.boundaries[0];
@@ -1879,7 +2349,6 @@ if (isCalibration) {
     // preTokens), which moves the same fact to 34% + their share — not a new number.
     assert.ok(Math.abs(s.unattributed - (0.34 + b.attachmentRecords.share)) < 0.05, 'unattributed drifted from experiment 1 (prompt 34% + attachment records)');
   });
-}
 
 test('rule is the sixth move: the same six gates, the same refusals', () => {
   // The rule cell must not be a self-report box. Pick a short sentence the segment
@@ -1931,12 +2400,12 @@ test('rule is the sixth move: the same six gates, the same refusals', () => {
   assert.equal(got.text, x.text);
 
   const sid = ledger.sessionId.slice(0, 8);
-  const json = JSON.parse(execFileSync(process.execPath, ['src/cli.mjs', 'rules', '--store', root, '--session', sid, '--json'], { cwd: tools, encoding: 'utf8' }));
+  const json = JSON.parse(execFileSync(process.execPath, ['src/cli.mjs', 'rules', '--store', root, '--session', sid, '--json'], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 }));
   assert.ok(json.some((r) => r.id === s.id && r.text === x.text && r.part === step.i), 'convledger rules --json must list the same rule');
-  const scoped = execFileSync(process.execPath, ['src/cli.mjs', 'rules', '--store', root, '--session', sid, '--part', String(step.i)], { cwd: tools, encoding: 'utf8' });
+  const scoped = execFileSync(process.execPath, ['src/cli.mjs', 'rules', '--store', root, '--session', sid, '--part', String(step.i)], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   assert.match(scoped, new RegExp(`块 ${step.i} · 1 条`), '--part must scope the list to that block');
   assert.ok(scoped.includes(x.text), 'the scoped list must quote the rule verbatim');
-  const none = execFileSync(process.execPath, ['src/cli.mjs', 'rules', '--store', root, '--session', sid, '--part', String(step.i + 1)], { cwd: tools, encoding: 'utf8' });
+  const none = execFileSync(process.execPath, ['src/cli.mjs', 'rules', '--store', root, '--session', sid, '--part', String(step.i + 1)], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   assert.match(none, /这块没有一条过了判据的 rule 增量 —— 不编/, 'an empty block must say so, not borrow a rule from elsewhere');
 });
 
@@ -1996,7 +2465,7 @@ test('skill 正本：只写命令名，且每个命令都真实存在', () => {
   assert.ok(md.includes('{{TOOL_ROOT}}'), 'SKILL.md 的入口要用 {{TOOL_ROOT}} 占位，换机器才能安装');
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
   const rendered = renderSkill(md, repoRoot);
-  const fm = md.match(/^---\n([\s\S]*?)\n---\n/);
+  const fm = md.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n/);
   assert.ok(fm, 'SKILL.md 必须以 YAML frontmatter 开头');
   const name = (fm[1].match(/^name:\s*(.+)$/m) || [])[1]?.trim();
   assert.equal(name, 'convledger', 'name 必须与目录名一致');
@@ -2016,13 +2485,15 @@ test('skill 正本：只写命令名，且每个命令都真实存在', () => {
     assert.ok(new RegExp(`(convledger ${c}(?![a-z-]))|(\`${c}(?![a-z-]))`).test(body), `SKILL.md 没有点名已实现的命令 convledger ${c}`);
   }
 
-  // 两个宿主各装一份：装了的必须与渲染后的正本逐字一致（没装的机器不勉强）
-  for (const host of ['.qoder', '.workbuddy']) {
-    const installed = path.join(os.homedir(), host, 'skills', 'convledger', 'SKILL.md');
-    if (fs.existsSync(installed)) {
-      assert.equal(fs.readFileSync(installed, 'utf8'), rendered, `${host} 的用户级 Skill 与渲染后的正本不一致：跑 node tool/skill/install.mjs`);
+  // Skill 落到四家：Qoder / Claude Code / WorkBuddy / OpenCode（Codex 没有 Skill 落点）
+  {
+    const inst = fs.readFileSync(new URL('../skill/install.mjs', import.meta.url), 'utf8');
+    for (const c of ['qoder', 'claude-code', 'workbuddy', 'opencode']) {
+      assert.ok(new RegExp(`client: '${c}'`).test(inst), `Skill 安装表里少了 ${c}`);
     }
   }
+  // 各宿主各装一份：装了的必须与渲染后的正本逐字一致（没装的机器不勉强）；
+  // 公开仓不假定开发机已装用户级 Skill，这一比对只在私有的开发机自测里做。
 });
 
 // 新设备适配：只对真装了的宿主动手；Node 不够就别假装能接 OpenCode。
@@ -2055,6 +2526,54 @@ test('setup 检测：宿主不存在不写配置，缺 node:sqlite 不接 OpenCo
   fs.rmSync(home, { recursive: true, force: true });
 });
 
+// 在线/使用中与「已连接」是两件事：进程认得出、仓库自己的 node 脚本别误报。
+test('宿主在线判定：进程名/命令行认得出，仓库自身脚本不误报', () => {
+  const win = ['"Qoder.exe","111","Console","1","100 K"', '"opencode.exe","222","Console","1","100 K"', '"node.exe","333","Console","1","100 K"'];
+  const m = matchHostProcesses(win);
+  assert.equal(m.qoder.any, true);
+  assert.equal(m.qoder.interactive, true);
+  assert.equal(m.opencode.interactive, true);
+  assert.equal(m['claude-code'].any, false);
+  assert.equal(m.workbuddy.any, false);
+  const ps = ['node /usr/local/bin/claude-code', 'codex --help', 'node /repo/convledger/tool/hooks/opencode.mjs brief'];
+  const p = matchHostProcesses(ps);
+  assert.equal(p['claude-code'].interactive, true);
+  assert.equal(p.codex.interactive, true);
+  assert.equal(p.opencode.any, false, '仓库自己的 opencode.mjs hook 不是宿主进程');
+  const svc = matchHostProcesses(['D:/npm-global/@opencode/cli/bin/opencode.exe serve --service']);
+  assert.equal(svc.opencode.any, true, '后台服务进程要认得出');
+  assert.equal(svc.opencode.interactive, false, '只剩后台服务不算界面在线');
+});
+
+test('OpenCode 标题读新表 session_v2（2.2.6 迁表后旧表停更）', async () => {
+  const base = fixture('oc-title-v2');
+  let DatabaseSync;
+  try { ({ DatabaseSync } = await import('node:sqlite')); }
+  catch { t.skip('这台机器没有 node:sqlite'); return; }
+  const dbFile = `${base}/oc.db`;
+  const db = new DatabaseSync(dbFile);
+  db.exec('create table session (id text primary key, title text); create table session_v2 (id text primary key, title text);');
+  db.prepare('insert into session values (?,?)').run('ses_new', '旧表标题');
+  db.prepare('insert into session_v2 values (?,?)').run('ses_new', '新表标题');
+  db.close();
+  const old = process.env.CONVLEDGER_OPENCODE_DB;
+  process.env.CONVLEDGER_OPENCODE_DB = dbFile;
+  try { assert.equal(hostTitleFor('ses_new', { runner: 'opencode' }), '新表标题'); }
+  finally { if (old === undefined) delete process.env.CONVLEDGER_OPENCODE_DB; else process.env.CONVLEDGER_OPENCODE_DB = old; }
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('App 看板：会话数用「个」、未建账不写 0 段、手动刷新绕过缓存', () => {
+  const js = fs.readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+  assert.ok(!/\d\s*段会话/.test(js), '会话数别写成「N 段会话」（段是分段，不是会话数）');
+  assert.match(js, /未建账/, '未建账会话不能显示成 0 段');
+  assert.match(js, /force=1/, '手动刷新要绕过 8 秒缓存');
+  assert.match(js, /online === true/, '卡片要显示在线/使用中');
+  assert.match(js, /后台服务/, '只剩 serve --service 时要与在线区分');
+  const css = fs.readFileSync(new URL('../web/app.css', import.meta.url), 'utf8');
+  assert.match(css, /\.alive/, '在线状态要有样式');
+});
+
 // 快捷方式那两段 PowerShell 曾经少写一个闭括号：解析不过去 → catch 形同不存在 → 用户只看到
 // 退出码 1（或一串 CLIXML）。真跑会动到这台机器的桌面（Desktop 在别的机器上可能被重定向），
 // 所以这里只做静态断言：括号成对、try 后不接空语句、错误走 stdout。
@@ -2067,7 +2586,43 @@ test('快捷方式的 PowerShell 正文：括号成对，失败要说人话', ()
     assert.ok(ps.includes('ERR:'), `${name}快捷方式没把错误写到 stdout：真出错时用户只会看到 CLIXML`);
   }
   assert.ok(shortcutPs('D:/x/y').includes('MISS:'), '建快捷方式要能报告"这台机器没有这个目录"');
-  assert.ok(shortcutPs('D:/x/y').replace(/\\/g, '/').includes('D:/x/y/tool/open-map.vbs'), '快捷方式指向本仓的 open-map.vbs');
+  assert.ok(shortcutPs('D:/x/y').replace(/\\/g, '/').includes('D:/x/y/tool/open-app.vbs'), '快捷方式指向本仓的 open-app.vbs（应用窗口）');
+  assert.ok(shortcutPs('D:/x/y').replace(/\\/g, '/').includes('D:/x/y/tool/web/convledger.ico'), '快捷方式用抠掉白底后的多尺寸图标');
+  const cli = fs.readFileSync(new URL('../src/cli.mjs', import.meta.url), 'utf8');
+  assert.match(cli, /cmd === 'app'/, 'CLI 要提供 app 命令');
+  assert.match(cli, /openAppWindow\(/, 'app 命令要用应用窗口打开');
+  // 单实例：应用窗用专用 profile，并且开窗前先找已有窗口聚焦
+  const setupSrc = fs.readFileSync(new URL('../src/setup.mjs', import.meta.url), 'utf8');
+  assert.match(setupSrc, /--user-data-dir=/, '应用窗要用独立 profile');
+  assert.match(setupSrc, /--no-first-run/, '应用窗要关掉浏览器首次启动向导，否则 Edge 会往桌面塞 Microsoft Edge 快捷方式');
+  assert.match(setupSrc, /--no-default-browser-check/, '应用窗不要再弹默认浏览器检查');
+  assert.match(setupSrc, /focusAppWindow/, '第二次启动要先聚焦已有窗口');
+  assert.match(setupSrc, /SetForegroundWindow/, '聚焦要走系统窗口 API');
+  assert.match(setupSrc, /app-launch\.lock/, '应用窗要有原子启动锁');
+  assert.match(setupSrc, /openSync\(lock, 'wx'\)/, '启动锁必须用 wx 原子创建，竞态只能放行一个入口');
+  assert.match(cli, /r\.pending/, '并发启动时 CLI 要说明「正在打开、不再开第二扇」');
+  const tray = fs.readFileSync(new URL('../tray.ps1', import.meta.url), 'utf8');
+  assert.match(tray, /System\.Windows\.Forms\.NotifyIcon/, '关窗后要缩成系统托盘小图标');
+  assert.match(tray, /ContextMenuStrip/, '托盘图标右键要有菜单');
+  assert.match(tray, /add_MouseClick/, '左键点托盘图标要能打开');
+  assert.match(tray, /restartLabel/, '托盘右键要有重启');
+  assert.match(tray, /CloseMainWindow/, '重启要先关旧应用窗');
+  assert.match(tray, /ApplicationContext/, '托盘消息循环不能因没有窗体而退出');
+  assert.doesNotMatch(tray, /PictureBox|CaptureThumb/, '不要再放桌面浮动预览卡');
+  assert.match(setupSrc, /ensureTray/, '应用窗启动时要带起托盘助手');
+  assert.doesNotMatch(setupSrc, /MainWindowTitle -match 'convledger'/, '不能用标题兜底认应用窗，普通浏览器页也会带 convledger 标题');
+  assert.match(cli, /await fetch\(u/, 'app 命令要先预取看板，再把窗口拉起来');
+  const appHtmlSrc = fs.readFileSync(new URL('../web/app.html', import.meta.url), 'utf8');
+  const appJsSrc = fs.readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+  assert.match(appHtmlSrc, /id="boot"/, '看板首帧要有深色启动层，不能白屏');
+  assert.match(appJsSrc, /getElementById\('boot'\)/, '数据到达后要撤掉启动层');
+  // 后台重算快照时 App 壳转小圈、前台不冻结（PRD-refresh）
+  assert.match(appHtmlSrc, /id="updating"/, 'App 壳要有后台更新转圈入口');
+  assert.match(appJsSrc, /getElementById\('updating'\)/, 'App 壳要按 refreshing 切换转圈');
+  assert.match(appJsSrc, /st\.refreshing \|\| \(sess && sess\.refreshing\)/, 'status 或 sessions 任一在重算都要转圈');
+  const appCssSrc = fs.readFileSync(new URL('../web/app.css', import.meta.url), 'utf8');
+  assert.match(appCssSrc, /\.updating\[hidden\] \{ display: none/, '转圈隐藏时要真的不占位（author display 会盖掉 hidden）');
+  assert.match(appCssSrc, /@keyframes uspin/, 'App 转圈动画要有 keyframes');
 });
 
 // 一份"够真"的 Qoder 会话日志：真人回合带 humanInput，工具用 tool_use/tool_result 块，
@@ -2128,8 +2683,8 @@ test('新用户首跑：setup 一次就能用，卸载撤得干净', () => {
     OPENCODE_CONFIG_DIR: `${home}/no-opencode`,
     CONVLEDGER_OPENCODE_DB: `${home}/no.db`,
   };
-  const run = (args) => spawnSync(process.execPath, ['src/cli.mjs', ...args], { cwd: tools, encoding: 'utf8', env });
-  const install = run(['setup', '--no-open', '--no-shortcut', '--store', store]);
+  const run = (args) => spawnSync(process.execPath, ['src/cli.mjs', ...args], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env });
+  const install = run(['setup', '--no-hub', '--no-open', '--no-shortcut', '--store', store]);
   const text = String(install.stdout);
   if (/hub 新起/.test(text)) run(['map', '--stop', '--store', store]); // 首跑真起了 hub 就收掉，不给机器留进程
   assert.equal(install.status, 0, `setup 首跑该 exit 0，实际 ${install.status}：${text.split('\n').slice(-6).join(' / ')}`);
@@ -2137,6 +2692,13 @@ test('新用户首跑：setup 一次就能用，卸载撤得干净', () => {
   assert.match(text, /✓ Skill 已装：Qoder/, '宿主在装，Skill 就该进去');
   assert.match(text, /✓ hooks 已注册：Qoder/, '宿主在装，hooks 就该挂上');
   assert.match(text, /(启动入口|快捷方式)：跳过/, '--no-shortcut 要照实说跳过，不是报错');
+  assert.ok(!/hub 新起/.test(text), '测试环境绝不 spawn 常驻 hub——否则会抢真端口 8765、App 显示空数据');
+  assert.match(text, /hub：跳过/, '--no-hub 要照实报告跳过');
+
+  // 默认不起常驻 hub：不带 --hub 就不该 spawn（装完不占后台内存），报告要写明怎么起
+  const noHub = run(['setup', '--no-open', '--no-shortcut', '--store', `${base}/store2`]);
+  assert.match(String(noHub.stdout), /hub：未启动/, '默认 setup 不该起 hub（要双击图标或 --hub）');
+  assert.ok(!/hub 新起/.test(String(noHub.stdout)), '默认 setup 不许 spawn 常驻 hub');
 
   // 只建真有源的：store 里就只有夹具那一个会话——仓库里的投影缓存不许冒充"这台机器有源"
   assert.deepEqual(fs.readdirSync(store), [sid], '无源 runner 的投影缓存被建成了账');
@@ -2153,13 +2715,13 @@ test('新用户首跑：setup 一次就能用，卸载撤得干净', () => {
   const repoRoot = path.resolve(tools, '..').replace(/\\/g, '/');
   assert.equal(fs.readFileSync(skillFile, 'utf8'), renderSkill(fs.readFileSync(new URL('../skill/convledger/SKILL.md', import.meta.url), 'utf8'), repoRoot), '装出去的 Skill 要渲染成真实仓库路径');
 
-  for (const line of ['1. 打开 http://127.0.0.1:8765/', '2. 点一行进画布', '3. ', '4. 页面关了怎么回来']) {
+  for (const line of ['1. 双击桌面「convledger 地图」打开会话库', '2. 点一行进画布', '3. ', '4. 页面关了怎么回来']) {
     assert.ok(text.includes(line), `就绪报告少了下一步的一条：${line}`);
   }
-  const again = run(['setup', '--no-open', '--no-shortcut', '--store', store]);
-  assert.match(again.stdout, /新建 0 · 已有账本 1/, '第二次跑不该重复建同一本账');
+  const again = run(['setup', '--no-hub', '--no-open', '--no-shortcut', '--store', store]);
+  assert.ok(/当前这段已有账本/.test(again.stdout) && !/新建 1/.test(again.stdout), '第二次跑该认出这本已有账，不重复建');
 
-  const un = run(['setup', '--uninstall', '--no-shortcut', '--store', store]);
+  const un = run(['setup', '--uninstall', '--no-hub', '--no-shortcut', '--store', store]);
   assert.equal(un.status, 0, `卸载该 exit 0：${String(un.stdout).split('\n').slice(-4).join(' / ')}`);
   assert.ok(!fs.existsSync(skillFile), '卸载要撤掉自己写的 Skill');
   assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(`${qoder}/settings.json`, 'utf8')).hooks || {}), [], '卸载要把四个事件都摘掉');
@@ -2175,7 +2737,7 @@ test('帮助免参数：--help 不被当成命令名，也不要求 --session', 
     fs.mkdirSync(`${base}/store/${id}`, { recursive: true });
     fs.writeFileSync(`${base}/store/${id}/ledger.json`, '{}');
   }
-  const run = (args) => spawnSync(process.execPath, ['src/cli.mjs', ...args, '--store', `${base}/store`], { cwd: tools, encoding: 'utf8' });
+  const run = (args) => spawnSync(process.execPath, ['src/cli.mjs', ...args, '--store', `${base}/store`], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   for (const args of [['--help'], ['help'], []]) {
     const r = run(args);
     assert.equal(r.status, 0, `convledger ${args.join(' ') || '(裸)'} 该 exit 0，实际 ${r.status}：${String(r.stdout).split('\n')[0]}`);
@@ -2187,7 +2749,7 @@ test('帮助免参数：--help 不被当成命令名，也不要求 --session', 
   assert.equal(need.status, 1, '两个会话却不给 --session，必须非零退出');
   assert.match(need.stdout, /store 里有 2 个会话，加 --session/);
   // 旗标写在命令前面也得算数：旧 parser 把 '--store' 当成命令名，会悄悄用默认 store
-  const first = spawnSync(process.execPath, ['src/cli.mjs', '--store', `${base}/store`, 'steps'], { cwd: tools, encoding: 'utf8' });
+  const first = spawnSync(process.execPath, ['src/cli.mjs', '--store', `${base}/store`, 'steps'], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   assert.match(first.stdout, /store 里有 2 个会话/, '--store 写在 steps 前面时被忽略了（报的是默认 store 的会话数）');
   fs.rmSync(base, { recursive: true, force: true });
 });
@@ -2199,7 +2761,7 @@ test('首轮走查修的五条：命令打错要说打错、trace 不整份倒�
     fs.mkdirSync(`${base}/store/${id}`, { recursive: true });
     fs.writeFileSync(`${base}/store/${id}/ledger.json`, JSON.stringify({ sessionId: id }));
   }
-  const run = (args, opt = {}) => spawnSync(process.execPath, ['src/cli.mjs', ...args, '--store', `${base}/store`], { cwd: tools, encoding: 'utf8', ...opt });
+  const run = (args, opt = {}) => spawnSync(process.execPath, ['src/cli.mjs', ...args, '--store', `${base}/store`], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, ...opt });
 
   // ① 打错命令名：以前 store 满会话时先撞上「store 里有 237 个会话」，命令名的错根本没被说
   const typo = run(['step']);
@@ -2226,12 +2788,12 @@ test('首轮走查修的五条：命令打错要说打错、trace 不整份倒�
   assert.ok(cur.cwd, 'resolveCurrent 带 preferred 也要给出 cwd，否则 export/progress 认不出项目');
 
   // ④ 站在自己仓库里跑 progress，不该被顶一句「store 里有 40 个项目」
-  const inRepo = spawnSync(process.execPath, [`${tools}/src/cli.mjs`, 'progress'], { cwd: tools.replace(/\/tool$/, ''), encoding: 'utf8' });
+  const inRepo = spawnSync(process.execPath, [`${tools}/src/cli.mjs`, 'progress'], { cwd: tools.replace(/\/tool$/, ''), encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   assert.equal(inRepo.status, 0, `不带 --project 的 progress 该按 cwd 认项目：${String(inRepo.stdout).split('\n')[0]}`);
   assert.match(inRepo.stdout, /项目 .+（p-[0-9a-f]{12}）/, '回执要写明认到了哪个项目');
 
   // ⑤ 块表不许把同一句话印两遍：没有综述时远景标题是中景标题的前缀，并排就是结巴
-  const st = spawnSync(process.execPath, [`${tools}/src/cli.mjs`, 'steps', '--session', sid], { cwd: tools, encoding: 'utf8' });
+  const st = spawnSync(process.execPath, [`${tools}/src/cli.mjs`, 'steps', '--session', sid], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   assert.equal(st.status, 0, `steps 该出块表：${String(st.stdout).split('\n')[0]}`);
   const stutter = String(st.stdout).split('\n').filter((l) => {
     const cell = String(l.split(' | ')[1] ?? '').split(' ⇒')[0];
@@ -2250,15 +2812,24 @@ test('压缩边界推送：hook 服务所有项目的会话、注入形状合法
   const SID = 'hookfixture0000000';
   const src = `${base}/projects/fixture/${SID}.jsonl`;
   fs.mkdirSync(`${base}/projects/fixture`, { recursive: true });
-  // 源日志永远只读：夹具是我们自己拷的一次性副本
-  fs.writeFileSync(src, fs.readFileSync(FILE, 'utf8').split('\n').filter(Boolean).slice(0, 240).join('\n') + '\n');
+  const repo = tools.replace(/\/tool$/, '');
+  // 源日志永远只读：夹具是我们自己拷的一次性副本。
+  // cwd 要落成这台机器上的路径：借读兜底按 cwd 整串相等找「本项目」，
+  // 原样留着 Windows 的 D:/... 在 Linux 上永远匹配不到。
+  const lines = fs.readFileSync(FILE, 'utf8').split('\n').filter(Boolean).slice(0, 240).map((line) => {
+    const o = JSON.parse(line);
+    if (typeof o.cwd === 'string') o.cwd = repo;
+    if (Array.isArray(o.directories)) o.directories = o.directories.map(() => repo);
+    return JSON.stringify(o);
+  });
+  fs.writeFileSync(src, lines.join('\n') + '\n');
   // WORKBUDDY_CONFIG_DIR 也关进夹具：体检命令会同时读两个宿主的 settings.json，
   // 不隔离就会把本机真实注册读进断言（而这台机器上它确实已经注册了）
   const env = { ...process.env, QODER_CONFIG_DIR: base, WORKBUDDY_CONFIG_DIR: `${base}/nowb`, CONVLEDGER_HOOK_STORE: `${base}/store`,
     CONVLEDGER_HOOK_LOG: `${base}/log.jsonl` };
-  const here = { cwd: tools.replace(/\/tool$/,''), session_id: SID };
+  const here = { cwd: repo, session_id: SID };
   const hook = (obj, extra, args = [], moreEnv = {}) => spawnSync(process.execPath, ['hooks/ledger-brief.mjs', ...args],
-    { cwd: tools, encoding: 'utf8', env: { ...env, ...moreEnv }, input: typeof obj === 'string' ? obj : JSON.stringify({ ...here, ...obj, ...extra }) });
+    { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env: { ...env, ...moreEnv }, input: typeof obj === 'string' ? obj : JSON.stringify({ ...here, ...obj, ...extra }) });
   const log = () => (fs.existsSync(`${base}/log.jsonl`) ? fs.readFileSync(`${base}/log.jsonl`, 'utf8') : '');
   const rows = () => log().trim().split('\n').map((l) => JSON.parse(l));
 
@@ -2370,14 +2941,14 @@ test('压缩边界推送：hook 服务所有项目的会话、注入形状合法
     assert.equal(row.origin, 'manual', `留痕行没标来源（或把自己标成了宿主）：${l}`);
   }
   // 注册脚本的命令行就是来源的唯一凭据：宿主只会按 settings.json 里那行跑
-  const inst = spawnSync(process.execPath, ['hooks/install.mjs'], { cwd: tools, encoding: 'utf8', env });
+  const inst = spawnSync(process.execPath, ['hooks/install.mjs'], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env });
   assert.equal(inst.status, 0, `install.mjs 退出 ${inst.status}：${inst.stdout}${inst.stderr}`);
   const reg = JSON.parse(fs.readFileSync(`${base}/settings.json`, 'utf8'));
   assert.deepEqual((reg.hooks.PostCompact[0].hooks[0].args || []).slice(1), ['--origin', 'host'],
     '注册的命令行没带溯源标记——手工跑的行就能冒充宿主触发');
 
   // 体检命令免 --session：多会话 store 下也要能单独回答「通路活着吗」
-  const diag = spawnSync(process.execPath, ['src/cli.mjs', 'hooks', '--store', `${base}/store`], { cwd: tools, encoding: 'utf8', env });
+  const diag = spawnSync(process.execPath, ['src/cli.mjs', 'hooks', '--store', `${base}/store`], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env });
   assert.equal(diag.status, 0, `convledger hooks 退出 ${diag.status}：${diag.stdout}${diag.stderr}`);
   for (const line of ['注册：', '留痕：', '压缩对照：', '注入：', '投递：', '判定：']) assert.ok(diag.stdout.includes(line), `体检输出缺行「${line}」：${diag.stdout}`);
   assert.match(diag.stdout, /PostCompact → convledger-brief/, `体检没把注册的挂上状态打出来：${diag.stdout}`);
@@ -2399,7 +2970,7 @@ test('压缩边界推送：hook 服务所有项目的会话、注入形状合法
   assert.equal(hostRow.summaryChars, 500, '留痕没记摘要字数');
   // 真有一条宿主发的注入，判定要从「还没取证」翻到「事件已实测、注入已留痕」——
   // 但「注进去的文本到了模型上下文」是另一件事，只有 PostCompact 留痕时投递那行必须仍写未取证。
-  const diag2 = spawnSync(process.execPath, ['src/cli.mjs', 'hooks', '--store', `${base}/store`], { cwd: tools, encoding: 'utf8', env });
+  const diag2 = spawnSync(process.execPath, ['src/cli.mjs', 'hooks', '--store', `${base}/store`], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env });
   assert.match(diag2.stdout, /判定：压缩后事件已实测发出、我们也注入过 1 次/, `宿主留痕到位后判定没翻过来：${diag2.stdout}`);
   assert.match(diag2.stdout, /投递：未取证/, '只有 PostCompact 的注入留痕就把投递写成通了——脚本返回不等于模型看见');
   assert.match(diag2.stdout, /注入：\d+ 次（manual=\d+ host=1）/, `注入行没分来源：${diag2.stdout}`);
@@ -2515,7 +3086,7 @@ test('第四个 runner：OpenCode 的 SQLite 先投影成 append-only JSONL，�
   `);
   const SID = 'ses_test0001';
   const ins = (sql, ...args) => db.prepare(sql).run(...args);
-  ins('insert into session values (?,?,?,?,?,?,?,?)', SID, 'calm-test', '测试会话', '<workspace>/demo', '{"id":"m1"}', 'build', 1000, 4000);
+  ins('insert into session values (?,?,?,?,?,?,?,?)', SID, 'calm-test', '测试会话', 'D:/work/demo', '{"id":"m1"}', 'build', 1000, 4000);
   ins('insert into message values (?,?,?,?,?)', 'msg_1', SID, 1000, 1000, JSON.stringify({ role: 'user' }));
   ins('insert into message values (?,?,?,?,?)', 'msg_2', SID, 2000, 3000, JSON.stringify({ role: 'assistant', modelID: 'm1' }));
   ins('insert into message values (?,?,?,?,?)', 'msg_3', SID, 3500, 3500, JSON.stringify({ role: 'user' }));
@@ -2535,7 +3106,7 @@ test('第四个 runner：OpenCode 的 SQLite 先投影成 append-only JSONL，�
   const text1 = fs.readFileSync(file, 'utf8');
   const lines = text1.trim().split('\n').map((l) => JSON.parse(l));
   assert.equal(lines[0].opencode, true, '投影第一行必须带 runner 身份');
-  assert.equal(lines[0].cwd, '<workspace>/demo');
+  assert.equal(lines[0].cwd, 'D:/work/demo');
   assert.ok(lines.some((l) => l.type === 'assistant' && l.message.content.some((b) => b.type === 'tool_use' && b.id === 'call_abc')), '工具调用没投影出来');
   assert.ok(lines.some((l) => l.type === 'user' && l.message.content.some((b) => b.type === 'tool_result' && b.tool_use_id === 'call_abc')), '工具结果没合成回投影');
   assert.ok(lines.some((l) => l.isCompactSummary), '压缩 part 没成为边界');
@@ -2574,7 +3145,7 @@ test('第四个 runner：OpenCode 的 SQLite 先投影成 append-only JSONL，�
   const r4 = syncOpencodeSession(SID, { dbFile, outDir: out });
   assert.equal(r4.written, 0, '源没变却重写了投影');
 
-  // OpenCode 的 hook 入口：brief 能出字；没有项目任务状态时收尾保持安静
+  // OpenCode 的 hook 入口：brief 能出字；没有任务表也要派收尾（首次建表）并带哨兵；内部会话跳过
   process.env.CONVLEDGER_HOOK_STORE = `${base}/store`;
   process.env.CONVLEDGER_OPENCODE_OUT = out;
   process.env.CONVLEDGER_HOOK_LOG = `${base}/hook-log.jsonl`;
@@ -2582,13 +3153,45 @@ test('第四个 runner：OpenCode 的 SQLite 先投影成 append-only JSONL，�
   const brief = hooks.briefForOpencode({ sid: SID });
   assert.ok(!brief.skip && /账本/.test(brief.text), `brief 没出字：${brief.skip || brief.text}`);
   const close = hooks.closeoutForOpencode({ sid: SID });
-  assert.equal(close.skip, 'no-tasks', `没有任务状态的项目不该被收尾打扰：${close.skip || 'prompted'}`);
+  assert.ok(!close.skip, `有新素材与真人消息就该派收尾：${close.skip || '没派'}`);
+  assert.match(close.text, /^\[convledger-internal\]/, '派给后台会话的指令必须带哨兵，防自我增殖');
+  assert.match(close.text, /localKey/, '项目还没有任务表时要提示先建首批任务');
+  assert.match(close.text, /有效素材单元/, 'OpenCode 收尾也要报过滤后的素材单元');
+  assert.doesNotMatch(close.text, /条新记录/, 'OpenCode 也不能把原始行数叫成新记录');
+  assert.equal(hooks.closeoutForOpencode({ sid: SID }).skip, 'already-prompted', '同一人回合只能派一次');
+  const { addInternal } = await import('../src/internal.mjs');
+  addInternal(`${base}/store`, SID);
+  assert.equal(hooks.closeoutForOpencode({ sid: SID }).skip, 'internal-session', '后台会话本身不能再被派收尾');
   delete process.env.CONVLEDGER_HOOK_STORE;
   delete process.env.CONVLEDGER_OPENCODE_OUT;
   delete process.env.CONVLEDGER_HOOK_LOG;
   fs.rmSync(base, { recursive: true, force: true });
 });
 
+// OpenCode 2.x 只认 V2 插件形状：旧命名导出 + experimental.session.compacting 不会被激活（真机探过）。
+test('OpenCode 插件按 V2 形状：Plugin.define + session.hook("compaction") + event.subscribe', () => {
+  const plugin = fs.readFileSync(new URL('../hooks/opencode-plugin.js', import.meta.url), 'utf8');
+  assert.match(plugin, /import \{ Plugin \} from '@opencode\/plugin'/, 'V2 插件要从 @opencode/plugin 拿 Plugin');
+  assert.match(plugin, /Plugin\.define\(/, 'V2 插件必须 default export Plugin.define(...)');
+  assert.match(plugin, /ctx\.session\.hook\('compaction'/, '压缩边界要挂 session.hook("compaction")');
+  assert.match(plugin, /ctx\.event\.subscribe\(/, '一轮结束要订阅事件流');
+  assert.match(plugin, /session\.execution\.succeeded/, '服务端的一轮结束信号是 session.execution.succeeded（session.idle 只在 TUI 层）');
+  assert.ok(!/types: \['session\.idle'\]/.test(plugin), 'session.idle 到不了服务端插件，别拿它挂收尾');
+  assert.match(plugin, /'internal', '--add'/, '后台会话要登记进内部表');
+  assert.match(plugin, /__CONVLEDGER_MAIN__/, '登记内部会话要走主 CLI，不能走 hook 入口');
+  assert.match(plugin, /switchModel/, '新建会话没有模型会 step.failed，要从源会话抄模型');
+  assert.match(plugin, /workers\.opencode/, '后台工作会话每家一段，OpenCode 不能抢 Qoder 的');
+  assert.ok(!/'experimental\.session\.compacting'\s*:/.test(plugin), '旧 hook 名在 2.x 里已不存在，不能再当键注册');
+  assert.ok(!/output\.context\.push/.test(plugin), '旧插件的 output.context 形状在 2.x 里拿不到');
+  const hook = fs.readFileSync(new URL('../hooks/opencode.mjs', import.meta.url), 'utf8');
+  assert.ok(!hook.includes("skip: 'no-tasks'"), '收尾不再用 no-tasks 跳过——没有任务表要先建首批');
+  assert.match(hook, /internal-session/, '收尾要能跳过后台会话');
+  const inst = fs.readFileSync(new URL('../hooks/install.mjs', import.meta.url), 'utf8');
+  assert.match(inst, /__CONVLEDGER_CLI__/, '安装时要渲染插件里的 CLI 绝对路径');
+  assert.match(inst, /plugin\/convledger\.js/, '安装时要清掉旧的 V1 单数目录插件');
+});
+
+// 宿主档案是单一事实来源：接了谁就必须有谁那页；状态只许三种口径，别写“已适配”。
 test('hook 认第三个 runner：transcript_path 只在已知根目录下才算数，注册形状按宿主方言', () => {
   const base = fixture('wb-hook');
   fs.rmSync(base, { recursive: true, force: true });
@@ -2610,7 +3213,7 @@ test('hook 认第三个 runner：transcript_path 只在已知根目录下才算�
   const env = { ...process.env, WORKBUDDY_CONFIG_DIR: base, QODER_CONFIG_DIR: `${base}/noqoder`,
     CONVLEDGER_HOOK_STORE: `${base}/store`, CONVLEDGER_HOOK_LOG: `${base}/log.jsonl` };
   const hook = (input, moreEnv = {}) => spawnSync(process.execPath, ['hooks/ledger-brief.mjs'], {
-    cwd: tools, encoding: 'utf8', env: { ...env, ...moreEnv },
+    cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env: { ...env, ...moreEnv },
     input: JSON.stringify({ hook_event_name: 'SessionStart', session_id: SID, cwd: repo, ...input }),
   });
 
@@ -2622,6 +3225,30 @@ test('hook 认第三个 runner：transcript_path 只在已知根目录下才算�
   assert.doesNotMatch(ctxA, /DECOY/, '诱饵会话混进了注入');
   const led = JSON.parse(fs.readFileSync(`${base}/store/${SID}/ledger.json`, 'utf8'));
   assert.equal(led.runner, 'workbuddy', `hook 建的账本 runner 不对：${led.runner}`);
+
+  // 不再给 WorkBuddy 写死「压缩时」：默认跟机器级走，Stop 应该拦。
+  const stopDefault = hook({ hook_event_name: 'Stop', transcript_path: real, stop_hook_active: false });
+  assert.equal(stopDefault.status, 0, `WorkBuddy Stop 退出 ${stopDefault.status}：${stopDefault.stderr}`);
+  const sdd = JSON.parse(stopDefault.stdout);
+  assert.equal(sdd.decision, 'block', 'WorkBuddy 不再有内置压缩时，默认应跟机器级走');
+  assert.match(sdd.reason, /还没有任务表/, '首次收尾要提示建表');
+
+  // 用户自己把 WorkBuddy 的收尾设成「压缩时」，Stop 才安静；这是设置页按 Agent 写入的同一形状。
+  fs.writeFileSync(`${env.CONVLEDGER_HOOK_STORE}/prefs.json`,
+    JSON.stringify({ schema: 'convledger-prefs/1', hosts: { workbuddy: { summaryCadence: 'each', closeoutCadence: 'compact' } } }, null, 1));
+  const stopCompact = hook({ hook_event_name: 'Stop', transcript_path: real, stop_hook_active: false });
+  assert.equal(stopCompact.status, 0, `WorkBuddy Stop 退出 ${stopCompact.status}：${stopCompact.stderr}`);
+  assert.equal(String(stopCompact.stdout).trim(), '', '显式设成压缩时后，Stop 不该再派收尾');
+
+  // 再改回每轮：认得出人类消息、首次要建表。
+  fs.writeFileSync(`${env.CONVLEDGER_HOOK_STORE}/prefs.json`,
+    JSON.stringify({ schema: 'convledger-prefs/1', hosts: { workbuddy: { summaryCadence: 'each', closeoutCadence: 'each' } } }, null, 1));
+  fs.rmSync(`${env.CONVLEDGER_HOOK_STORE}/${SID}/closeout-prompt.json`, { force: true });
+  const stop = hook({ hook_event_name: 'Stop', transcript_path: real, stop_hook_active: false });
+  assert.equal(stop.status, 0, `WorkBuddy Stop 退出 ${stop.status}：${stop.stderr}`);
+  const sd = JSON.parse(stop.stdout);
+  assert.equal(sd.decision, 'block', 'WorkBuddy 的收尾提示被误判成没人说话');
+  assert.match(sd.reason, /还没有任务表/, 'WorkBuddy 侧首次收尾也要提示建表');
 
   // 没有 transcript_path 时扫 WorkBuddy 的根目录（Qoder 那边的根是空的）
   const b = hook({}, { CONVLEDGER_HOOK_STORE: `${base}/store2` });
@@ -2640,17 +3267,22 @@ test('hook 认第三个 runner：transcript_path 只在已知根目录下才算�
     claw: { keep: true },
     hooks: { Stop: [{ matcher: '', hooks: [{ type: 'command', command: "bash '/c/x/hook.sh'" }] }] },
   }, null, 2));
-  const runInstall = (args) => spawnSync(process.execPath, ['hooks/install.mjs', ...args], { cwd: tools, encoding: 'utf8', env });
+  const runInstall = (args) => spawnSync(process.execPath, ['hooks/install.mjs', ...args], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env });
   const inst = runInstall(['--client', 'workbuddy']);
   assert.equal(inst.status, 0, `装 WorkBuddy hook 失败：${inst.stdout}${inst.stderr}`);
   const reg = JSON.parse(fs.readFileSync(`${base}/settings.json`, 'utf8'));
   const h = reg.hooks.SessionStart[0].hooks[0];
+  assert.equal(reg.hooks.SessionStart[0].matcher, '', 'WorkBuddy 的条目不写 matcher，重装/重启后会被它丢掉');
   assert.equal(h.type, 'command');
   assert.equal(h.args, undefined, 'WorkBuddy 侧不许带 args——它的 handler 形状里没有这个字段');
   assert.equal(typeof h.command, 'string');
   assert.ok(h.command.includes('ledger-brief.mjs'), `shell 串里没有本仓脚本：${h.command}`);
   assert.match(h.command, /--origin host/, '注册的命令行没带溯源标记');
-  assert.ok(/^".*"\s/.test(h.command), `带空格的 node 路径没加引号，cmd 会把它拆开：${h.command}`);
+  // 路径里有空格（Windows 的 Program Files）必须加引号，否则 cmd 会拆开；
+  // POSIX 上的 /usr/bin/node 没有空格，不加引号是正确形态，不拿 Windows 的串去要求它。
+  const needsQuote = /[\s"']/.test(process.execPath);
+  assert.ok(needsQuote ? /^".*"\s/.test(h.command) : h.command.startsWith(process.execPath + ' '),
+    `node 路径处理不对（${needsQuote ? '含空格，必须加引号' : '无空格，不该硬加引号'}）：${h.command}`);
   assert.deepEqual(reg.claw, { keep: true }, '别的顶层键被改了');
   assert.equal(reg.hooks.Stop[0].hooks[0].command, "bash '/c/x/hook.sh'", '别人的 hook 被删了或改了');
 
@@ -2660,6 +3292,65 @@ test('hook 认第三个 runner：transcript_path 只在已知根目录下才算�
   assert.deepEqual(Object.keys(after.hooks), ['Stop'], `卸载没摘干净（或误删了别人的）：${Object.keys(after.hooks)}`);
   assert.equal(after.hooks.Stop[0].hooks[0].command, "bash '/c/x/hook.sh'");
   assert.deepEqual(after.claw, { keep: true });
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('Claude Code 与 Codex 的 hook 注册：文件位置、事件形状、别人的条目与卸载', () => {
+  const base = fixture('hooks-more');
+  fs.rmSync(base, { recursive: true, force: true });
+  fs.mkdirSync(`${base}/claude`, { recursive: true });
+  fs.mkdirSync(`${base}/codex`, { recursive: true });
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: `${base}/claude`, CODEX_HOME: `${base}/codex` };
+  // 别人的条目先放着：注册只许追加，卸载只许摘自己的
+  fs.writeFileSync(`${base}/claude/settings.json`, JSON.stringify({
+    other: 1,
+    hooks: { Stop: [{ hooks: [{ type: 'command', command: "bash '/c/x/hook.sh'" }] }] },
+  }, null, 2));
+  fs.writeFileSync(`${base}/codex/hooks.json`, JSON.stringify({
+    description: 'mine',
+    hooks: { Stop: [{ matcher: 'x', hooks: [{ type: 'command', command: 'echo keep' }] }] },
+  }, null, 2));
+  const run = (args) => spawnSync(process.execPath, ['hooks/install.mjs', ...args], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env });
+
+  // setup 的宿主表要认 Claude Code 的 hooks，否则一键安装不会装它
+  const crow = hostRows({ home: `${base}/home`, env: { ...env, QODER_CONFIG_DIR: `${base}/noq`, WORKBUDDY_CONFIG_DIR: `${base}/nowb`, OPENCODE_CONFIG_DIR: `${base}/nooc` }, sqlite: true, sessions: [] })
+    .find((r) => r.id === 'claude-code');
+  assert.equal(crow.canHook, true, 'setup 不认 Claude Code 的 hook：一键安装不会装它');
+
+  const a = run(['--client', 'claude-code']);
+  assert.equal(a.status, 0, `装 Claude Code hook 失败：${a.stdout}${a.stderr}`);
+  const cl = JSON.parse(fs.readFileSync(`${base}/claude/settings.json`, 'utf8'));
+  for (const ev of ['SessionStart', 'PreCompact', 'PostCompact', 'Stop']) {
+    const hs = (cl.hooks[ev] || []).flatMap((d) => d.hooks || []);
+    assert.ok(hs.some((h) => h.type === 'command' && /ledger-brief\.mjs/.test(h.command) && /--origin host/.test(h.command)),
+      `Claude Code 的 ${ev} 没注册成 shell 串`);
+  }
+  assert.equal(cl.other, 1, 'Claude Code 里别的顶层键被改了');
+  assert.equal(cl.hooks.Stop[0].hooks[0].command, "bash '/c/x/hook.sh'", 'Claude Code 里别人的 hook 被动了');
+
+  const c = run(['--client', 'codex']);
+  assert.equal(c.status, 0, `装 Codex hook 失败：${c.stdout}${c.stderr}`);
+  const cx = JSON.parse(fs.readFileSync(`${base}/codex/hooks.json`, 'utf8'));
+  // Codex 只公开 SessionStart / Stop；写 PreCompact/PostCompact 不会触发，还会让人误以为压缩边界有注入
+  for (const ev of ['SessionStart', 'Stop']) {
+    const mine = (cx.hooks[ev] || []).flatMap((d) => d.hooks || [])
+      .filter((h) => h.type === 'command' && /ledger-brief\.mjs/.test(h.command) && /ledger-brief\.mjs/.test(h.commandWindows));
+    assert.equal(mine.length, 1, `Codex 的 ${ev} 没装或装重`);
+  }
+  assert.ok(!cx.hooks.PreCompact && !cx.hooks.PostCompact, 'Codex 没有压缩事件，别注册');
+  assert.equal(cx.description, 'mine', 'Codex 文件里别的顶层键被改了');
+  assert.ok((cx.hooks.Stop || []).some((d) => (d.hooks || []).some((h) => h.command === 'echo keep')), 'Codex 里别人的 hook 被动了');
+
+  const ra = run(['--client', 'claude-code', '--remove']);
+  assert.equal(ra.status, 0, ra.stderr);
+  const cl2 = JSON.parse(fs.readFileSync(`${base}/claude/settings.json`, 'utf8'));
+  assert.deepEqual(Object.keys(cl2.hooks), ['Stop'], `Claude Code 卸载没摘干净：${Object.keys(cl2.hooks)}`);
+  assert.equal(cl2.hooks.Stop[0].hooks[0].command, "bash '/c/x/hook.sh'");
+  const rc = run(['--client', 'codex', '--remove']);
+  assert.equal(rc.status, 0, rc.stderr);
+  const cx2 = JSON.parse(fs.readFileSync(`${base}/codex/hooks.json`, 'utf8'));
+  assert.deepEqual(Object.keys(cx2.hooks), ['Stop'], `Codex 卸载没摘干净：${Object.keys(cx2.hooks)}`);
+  assert.ok((cx2.hooks.Stop || []).some((d) => (d.hooks || []).some((h) => h.command === 'echo keep')));
   fs.rmSync(base, { recursive: true, force: true });
 });
 
@@ -2799,7 +3490,11 @@ test('会话库标题优先读桌面端标题，读不到才回落账本', async
   try {
     const mapSrc = fs.readFileSync(new URL('../src/map.mjs', import.meta.url), 'utf8');
     assert.match(mapSrc, /sweepNewSessions/, 'hub 要能自己发现还没建账的新会话');
-    assert.match(mapSrc, /listSessions\(\)/, '自动建账的候选只能来自源扫描，不是乱猜目录');
+    assert.match(mapSrc, /refresh\.sweep\(/, '主线程只派 sweep 给后台 worker，不在主线程建账');
+    assert.doesNotMatch(mapSrc, /listSessions\(\)/, '主线程不再扫源建账——那是多 agent＋长对话卡死机器的病根');
+    const workerSrc = fs.readFileSync(new URL('../src/refresh-worker.mjs', import.meta.url), 'utf8');
+    assert.match(workerSrc, /listSessions\(\)/, '自动建账的候选只能来自源扫描，不是乱猜目录');
+    assert.match(workerSrc, /function sweepJob/, 'sweep 在 worker 上跑，主线程永远空闲');
 
     const lib = libraryOf(root, { now: Date.now() });
     const byId = Object.fromEntries(lib.groups.flatMap((g) => g.sessions).map((s) => [s.id, s]));
@@ -2841,7 +3536,7 @@ test('/sessions.json 是只读清单；/open 与前缀地址都只跳规范地�
   fs.writeFileSync(`${root}/broken/ledger.json`, '{oops');
 
   const req = (port, path, method = 'GET') => new Promise((res, rej) => {
-    const r = http.request({ host: '127.0.0.1', port, path, method }, (x) => {
+    const r = http.request({ host: '127.0.0.1', port, path, method, headers: h ? { 'x-hub-key': h.token } : undefined }, (x) => {
       let b = ''; x.on('data', (d) => { b += d; }); x.on('end', () => res({ status: x.statusCode, body: b, headers: x.headers }));
     });
     r.on('error', rej); r.end();
@@ -2886,7 +3581,7 @@ test('/sessions.json 是只读清单；/open 与前缀地址都只跳规范地�
 });
 
 // 项目层：归组只认 cwd 整串相等。大小写和尾斜杠是同一段路径的不同拼写（normCwd 合并），
-// 但父子目录是两个项目——前缀推断会把 <workspace> 下所有子项目吞成一个「大项目」。
+// 但父子目录是两个项目——前缀推断会把 D:/work 下所有子项目吞成一个「大项目」。
 test('项目层：cwd 整串相等才同组，无 cwd 只进未归组，键跨运行稳定', () => {
   const base = fixture('projects');
   fs.rmSync(base, { recursive: true, force: true });
@@ -2937,7 +3632,7 @@ test('项目层：cwd 整串相等才同组，无 cwd 只进未归组，键跨�
 test('项目层与 store 对齐：会话合计＋未归组＝账本目录数，归组结果可逐本对回', () => {
   const root = `${tools}/out/store`;
   const dirs = fs.readdirSync(root).filter((d) => fs.existsSync(path.join(root, d, 'ledger.json')));
-  const r = spawnSync(process.execPath, ['src/cli.mjs', 'projects', '--json', '--store', root], { cwd: tools, encoding: 'utf8' });
+  const r = spawnSync(process.execPath, ['src/cli.mjs', 'projects', '--json', '--store', root], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   assert.equal(r.status, 0, r.stderr);
   const j = JSON.parse(r.stdout);
   assert.equal(j.schema, 'convledger-projects/1');
@@ -2955,13 +3650,15 @@ test('项目层与 store 对齐：会话合计＋未归组＝账本目录数，�
     .filter((s) => s.live && normCwd(s.cwd)).length;
   assert.equal(j.counts.live, groupedLive, 'live 数必须和会话库同一把尺（LIVE_MIN）');
 
-  const t = spawnSync(process.execPath, ['src/cli.mjs', 'projects', '--store', root], { cwd: tools, encoding: 'utf8' });
+  const t = spawnSync(process.execPath, ['src/cli.mjs', 'projects', '--store', root], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   assert.equal(t.status, 0, t.stderr);
   assert.match(t.stdout, /^项目 \d+ · 会话 \d+ \/ \d+ 本账（未归组 \d+）/);
   assert.equal(t.stdout.split('\n').filter((l) => /^p-[0-9a-f]{12} · /.test(l)).length, j.counts.projects, '默认输出必须列出每个项目');
 });
 
-// 记忆层夹具：校准会话前 240 行 → 5 段（S01/S05 有真人原话，S02–S04 只有工具段）。
+// 记忆层夹具：校准会话前 480 行 → 5 段（S01/S05 有真人原话，S02–S04 只有工具段）。
+// 为什么是 480 不是 240：那段会话被更新过，前 240 行实测只切出 3 段（S01–S03），
+// 夹具里写死的 S05 就不存在了。切多少行不是重点，「够 5 段」才是——下面的断言会守住它。
 // claims 直接写表再重建——与 claim 命令走同一条叠加规则（author≠rule-layer 且 segmentHash 相同）。
 function memoryFixture() {
   const base = fixture('memory');
@@ -2971,7 +3668,7 @@ function memoryFixture() {
   // cwd 必须改到夹具目录：写成真项目根的话，`memory --put` 的自动导出会写进用户的仓库。
   const proj = `${base}/proj`;
   fs.mkdirSync(proj, { recursive: true });
-  const lines = fs.readFileSync(CALIBRATION, 'utf8').split('\n').slice(0, 240);
+  const lines = fs.readFileSync(CALIBRATION, 'utf8').split('\n').slice(0, 480);
   const retarget = lines.map((line) => {
     if (!line.trim()) return line;
     const o = JSON.parse(line);
@@ -2984,6 +3681,7 @@ function memoryFixture() {
   writeStore(root, build(src, { storeRoot: root }));
   const dir = `${root}/memsession0000000a`;
   const ledger = JSON.parse(fs.readFileSync(`${dir}/ledger.json`, 'utf8'));
+  assert.ok(ledger.segments.length >= 5, `夹具源只切出 ${ledger.segments.length} 段，S05 不存在——把 slice 行数调大`);
   const hash = {};
   for (const s of ledger.segments) hash[s.id] = s.contentHash;
   fs.writeFileSync(`${dir}/claims.json`, JSON.stringify({
@@ -2992,7 +3690,16 @@ function memoryFixture() {
   }, null, 1));
   const project = projectsOf(root, { withSteps: false }).projects[0];
   const short = Object.fromEntries(Object.entries(hash).map(([k, v]) => [k, v.slice(0, 12)]));
-  return { base, src, root, project, sid8: 'memsessi', hash: short };
+  // 有没有一句中文真人原话，由内容决定：CALIBRATION 那段源可能整份都是英文与工具回执，
+  // 这时依赖「say 类证据」的用例没有材料，应该跳过并说明，而不是崩在 segHash 里。
+  const say = (() => {
+    for (const n of readView(dir).nodes) {
+      const m = typeof n.say === 'string' ? n.say.match(/[\u4e00-\u9fa5]{8,}/) : null;
+      if (m) return { seg: n.id, quote: m[0], hash: short[n.id] };
+    }
+    return null;
+  })();
+  return { base, src, root, project, sid8: 'memsessi', hash: short, say, segments: ledger.segments.length };
 }
 
 /** 用户层夹具：同一份前 240 行建两本账，只换 cwd 与文件名 → 两个项目。
@@ -3002,7 +3709,7 @@ function userMemoryFixture() {
   const base = fixture('user-memory');
   fs.rmSync(base, { recursive: true, force: true });
   fs.mkdirSync(`${base}/src`, { recursive: true });
-  const lines = fs.readFileSync(CALIBRATION, 'utf8').split('\n').slice(0, 240);
+  const lines = fs.readFileSync(CALIBRATION, 'utf8').split('\n').slice(0, 480);
   const retarget = (cwd) => lines.map((line) => {
     if (!line.trim()) return line;
     const o = JSON.parse(line);
@@ -3012,14 +3719,30 @@ function userMemoryFixture() {
   }).join('\n') + '\n';
   const root = `${base}/store`;
   const hash = {};
+  let say = null;
   for (const [name, cwd] of [['mema00000001', 'D:/proj/memfixture-a'], ['memb00000001', 'D:/proj/memfixture-b']]) {
     const src = `${base}/src/${name}.jsonl`;
     fs.writeFileSync(src, retarget(cwd));
     writeStore(root, build(src, { storeRoot: root }));
     const dir = `${root}/${name}`;
     const ledger = JSON.parse(fs.readFileSync(`${dir}/ledger.json`, 'utf8'));
+    assert.ok(ledger.segments.length >= 5, `夹具源只切出 ${ledger.segments.length} 段，S05 不存在——把 slice 行数调大`);
+    // 哪一段里有人话、那句话长什么样，都由**解析后的视图**给出，不由段号也不由原始行给出：
+    // 证据校验比对的正是视图里的人话，拿原始 JSON 的 humanInput.text 会对不上（真踩过）。
+    const sayHit = (() => {
+      for (const n of readView(dir).nodes) {
+        const m = typeof n.say === 'string' ? n.say.match(/[\u4e00-\u9fa5]{8,}/) : null;
+        if (m) return { seg: n.id, quote: m[0], hash: String((ledger.segments.find((s) => s.id === n.id) || {}).contentHash || '').slice(0, 12) };
+      }
+      return null;
+    })();
+    say = sayHit;   // 可能是 null：源整份没有人话时，依赖 say 证据的用例自己跳过
     hash[name] = Object.fromEntries(ledger.segments.map((s) => [s.id, String(s.contentHash).slice(0, 12)]));
-    const segHash = (id) => ledger.segments.find((s) => s.id === id).contentHash;
+    const segHash = (id) => {
+      const seg = ledger.segments.find((s) => s.id === id);
+      assert.ok(seg, `${name} 没有段 ${id}——夹具假设过期了，先看上面段数断言`);
+      return seg.contentHash;
+    };
     fs.writeFileSync(`${dir}/claims.json`, JSON.stringify({
       S01: { text: '夹具规则一：先测再改', moves: 'rule', topic: '夹具规则', evidence: [1], basis: 'verified', author: 'model-layer', segmentHash: segHash('S01') },
       S05: { text: '夹具经验一：先接成熟件再自研', moves: 'decision', topic: '夹具经验', evidence: [1], basis: 'verified', author: 'model-layer', segmentHash: segHash('S05') },
@@ -3029,24 +3752,25 @@ function userMemoryFixture() {
   const pA = projects.find((p) => p.members.some((m) => m.id === 'mema00000001'));
   const pB = projects.find((p) => p.members.some((m) => m.id === 'memb00000001'));
   assert.ok(pA && pB && pA.key !== pB.key, '两本账必须落成两个项目');
-  return { base, root, pA, pB, hash };
+  return { base, root, pA, pB, hash, say };
 }
 
-test('项目记忆：闸门逐条拒（锚点/逐字/工具回执/截段/类别/画像/重复），整批失败不落盘', () => {
+test('项目记忆：闸门逐条拒（锚点/逐字/工具回执/截段/类别/画像/重复），整批失败不落盘', (t) => {
   const f = memoryFixture();
+  if (!f.say) { t.skip('CALIBRATION 那段源整份没有中文真人原话（全是英文与工具回执），say 类证据造不出来'); return; }
   const ctx = memoryContext(f.root, f.project);
   assert.equal(ctx.members.length, 1);
 
   // 一条记忆都没有时，第二段「现在到哪」照样答得出来（全部工具复算）
   const zero = memoryRead(f.root, f.project);
   assert.match(zero.text, /## 现在到哪（工具复算）/);
-  assert.match(zero.text, /最新会话 memsessi · 5 段/);
+  assert.match(zero.text, new RegExp(`最新会话 memsessi · ${f.segments} 段`));
   assert.match(zero.text, /本类 0 条/);
   assert.match(zero.text, /用户表里 0 条/);
 
   const ev = {
     rule: { sid: f.sid8, seg: 'S01', hash: f.hash.S01, kind: 'claim', quote: '夹具规则一：先测再改' },
-    say: { sid: f.sid8, seg: 'S01', hash: f.hash.S01, kind: 'say', quote: '这是我昨天克隆下来的一些项目' },
+    say: { sid: f.sid8, seg: f.say.seg, hash: f.hash[f.say.seg], kind: 'say', quote: f.say.quote },
     decision: { sid: f.sid8, seg: 'S05', hash: f.hash.S05, kind: 'claim', quote: '夹具经验一：先接成熟件再自研' },
   };
   const good = { class: '规则', topic: '夹具规则', text: '夹具规则：先写测试再改代码', evidence: [ev.rule, ev.say] };
@@ -3110,7 +3834,7 @@ test('项目记忆：闸门逐条拒（锚点/逐字/工具回执/截段/类别/
   assert.equal(rebuilt.built.rebuilt.length, 1);
   assert.equal(readProjectMemories(f.root, f.project.key).entries.length, 3);
 
-  const cli = (args, input) => spawnSync(process.execPath, ['src/cli.mjs', ...args, '--store', f.root, '--project', f.project.key], { cwd: tools, encoding: 'utf8', input });
+  const cli = (args, input) => spawnSync(process.execPath, ['src/cli.mjs', ...args, '--store', f.root, '--project', f.project.key], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, input });
   const put = (entries) => cli(['memory', '--put', '-'], JSON.stringify({ entries }));
   const c1 = put([{ class: '进度', topic: '夹具进度', text: '夹具进度：首段已建账并留下原话', evidence: [ev.say] }]);
   assert.equal(c1.status, 0, c1.stdout + c1.stderr);
@@ -3214,18 +3938,85 @@ test('记忆素材：只走派生层、按会话整段取舍、单会话成本�
   }
 });
 
-test('用户画像：G9 作用域与跨会话门槛，--put --scope user 全有或全无，读取带来源', () => {
+test('画像自动触发：≥2 段新会话才催，同一批只催一次，新一批再催', () => {
+  const base = fixture('profile-auto');
+  fs.rmSync(base, { recursive: true, force: true });
+  const root = `${base}/store`;
+  fs.mkdirSync(root, { recursive: true });
+  const mk = (id, iso) => {
+    const dir = `${root}/${id}`;
+    fs.mkdirSync(dir, { recursive: true });
+    const src = `${dir}/src.jsonl`;
+    fs.writeFileSync(src, `${JSON.stringify({ type: 'user', cwd: 'D:/fixture/prof', message: { content: 'hi' } })}\n`);
+    fs.writeFileSync(`${dir}/ledger.json`, JSON.stringify({
+      sessionId: id, runner: 'qoder', cwd: 'D:/fixture/prof', sourceFile: src,
+      sourceBytes: 10, builtAt: new Date().toISOString(), segments: [],
+    }));
+    const t = new Date(iso);
+    fs.utimesSync(src, t, t);
+  };
+  mk('prof-sess-a', '2026-11-01T00:00:00Z');
+  mk('prof-sess-b', '2026-11-02T00:00:00Z');
+  let d = profileDue(root, { now: Date.parse('2026-11-03T00:00:00Z') });
+  assert.equal(d.due, true, `两段会话且画像为空，应触发（${d.reason}）`);
+  assert.equal(d.newer, 2);
+  markProfilePrompt(root, d.fingerprint);
+  d = profileDue(root, { now: Date.parse('2026-11-03T00:00:00Z') });
+  assert.equal(d.due, false);
+  assert.equal(d.reason, 'already-asked', '同一批不要每轮催');
+  // 活跃会话继续写（mtime 变了）不等于新一批：指纹按会话集合，不能反复催
+  const bSrc = `${root}/prof-sess-b/src.jsonl`;
+  const t2 = new Date('2026-11-02T12:00:00Z');
+  fs.utimesSync(bSrc, t2, t2);
+  d = profileDue(root, { now: Date.parse('2026-11-03T00:00:00Z') });
+  assert.equal(d.due, false, '同一批会话又长了，不能重复催');
+  mk('prof-sess-c', '2026-11-04T00:00:00Z');
+  d = profileDue(root, { now: Date.parse('2026-11-05T00:00:00Z') });
+  assert.equal(d.due, true, '新一批会话到了要再催');
+  assert.equal(d.newer, 3);
+  // 自我排除：本工具派的后台会话（源头带 convledger-internal 哨兵）不算「新会话」——否则分析器自我催到无限
+  markProfilePrompt(root, profileDue(root, { now: Date.parse('2026-11-05T00:00:00Z') }).fingerprint);
+  const bgDir = `${root}/prof-sess-bg`;
+  fs.mkdirSync(bgDir, { recursive: true });
+  const bgSrc = `${bgDir}/src.jsonl`;
+  fs.writeFileSync(bgSrc, `${JSON.stringify({ note: 'convledger-internal' })}\n`);
+  fs.writeFileSync(`${bgDir}/ledger.json`, JSON.stringify({ sessionId: 'prof-sess-bg', runner: 'qoder', cwd: 'D:/fixture/prof', sourceFile: bgSrc, builtAt: new Date().toISOString(), segments: [] }));
+  const bt = new Date('2026-11-06T00:00:00Z'); fs.utimesSync(bgSrc, bt, bt);
+  d = profileDue(root, { now: Date.parse('2026-11-07T00:00:00Z') });
+  assert.equal(d.due, false, '哨兵后台会话不该算「新会话」（防无限自我催）');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('用户画像：G9 作用域与跨会话门槛，--put --scope user 全有或全无，读取带来源', (t) => {
   const f = userMemoryFixture();
+  if (!f.say) { t.skip('CALIBRATION 那段源整份没有中文真人原话（全是英文与工具回执），say 类证据造不出来'); return; }
   const ctx = userContext(f.root);
   assert.equal(ctx.projects.length, 2);
   assert.equal(ctx.members.length, 2);
 
-  const quote = '这是我昨天克隆下来的一些项目';
-  const evA = { project: f.pA.key, sid: 'mema0000', seg: 'S01', hash: f.hash.mema00000001.S01, kind: 'say', quote };
-  const evB = { project: f.pB.name, sid: 'memb0000', seg: 'S01', hash: f.hash.memb00000001.S01, kind: 'say', quote };
+  // 段号与原话都由夹具按内容给出：写死「S01 + 某句话」会随会话更新失效。
+  const quote = f.say.quote;
+  const evA = { project: f.pA.key, sid: 'mema0000', seg: f.say.seg, hash: f.hash.mema00000001[f.say.seg], kind: 'say', quote };
+  const evB = { project: f.pB.name, sid: 'memb0000', seg: f.say.seg, hash: f.hash.memb00000001[f.say.seg], kind: 'say', quote };
   const good = { class: '画像', topic: '先看全量', text: '画像：动手前先要一张全量清单再判断', evidence: [evA, evB] };
   const ok0 = validateUserEntry(good, ctx);
   assert.equal(ok0.ok, true, ok0.errors.join('；'));
+  const withDim = validateUserEntry({ ...good, dimension: '性格' }, ctx);
+  assert.equal(withDim.ok, true, withDim.errors.join('；'));
+  assert.equal(withDim.row.dimension, '性格', '画像要能带维度（性格/目标/边界/验收…）');
+  const badDim = validateUserEntry({ ...good, dimension: '随便' }, ctx);
+  assert.equal(badDim.ok, false, '维度不在枚举里要拒');
+  assert.match(badDim.errors.join('\n'), /dimension/, '拒的理由要说 dimension');
+
+  const withScenes = validateUserEntry({ ...good, dimension: '性格', scenes: ['ui', 'design'] }, ctx);
+  assert.equal(withScenes.ok, true, withScenes.errors.join('；'));
+  assert.deepEqual(withScenes.row.scenes, ['ui', 'design'], '画像要能带多轴场景标签');
+  const badScene = validateUserEntry({ ...good, scenes: ['poster'] }, ctx);
+  assert.equal(badScene.ok, false, '场景不在枚举里要拒');
+  assert.match(badScene.errors.join('\n'), /scenes/, '拒的理由要说 scenes');
+  const blankScenes = validateUserEntry({ ...good, scenes: [] }, ctx);
+  assert.equal(blankScenes.ok, true);
+  assert.deepEqual(blankScenes.row.scenes, [], 'scenes 可为空，不硬套');
 
   const reject = (patch, re, why) => {
     const r = validateUserEntry({ ...good, ...patch }, ctx);
@@ -3269,14 +4060,14 @@ test('用户画像：G9 作用域与跨会话门槛，--put --scope user 全有�
   // 读取第 5 段从用户表来，带 来源 <项目>:<sid>:<seg>
   const read = memoryRead(f.root, f.pA);
   assert.match(read.text, /## 用户画像 \/ 工作方式/);
-  assert.match(read.text, /\[U01\][^\n]*来源 memfixture-a:mema0000:S01 · memfixture-b:memb0000:S01/);
+  assert.match(read.text, new RegExp(`\\[U01\\][^\\n]*来源 memfixture-a:mema0000:${f.say.seg} · memfixture-b:memb0000:${f.say.seg}`));
   assert.ok(tok(read.text) <= MEMORY_READ_FIXED + MEMORY_READ_PER_ENTRY * (read.table.entries.length + read.user.table.entries.length),
     `读取 ${tok(read.text)}t 超速率（固定 ${MEMORY_READ_FIXED} + ${MEMORY_READ_PER_ENTRY}/条）`);
 
   // 两个项目各写一条等价规则，再晋升
   const ruleEvA = { sid: 'mema0000', seg: 'S01', hash: f.hash.mema00000001.S01, kind: 'claim', quote: '夹具规则一：先测再改' };
   const ruleEvB = { sid: 'memb0000', seg: 'S01', hash: f.hash.memb00000001.S01, kind: 'claim', quote: '夹具规则一：先测再改' };
-  const rule = { class: '规则', topic: '夹具规则', text: '夹具规则：先写测试再改代码' };
+  const rule = { class: '规则', topic: '夹具规则', text: '夹具规则：先写测试再改代码', dimension: '验收', scenes: ['test', 'code'] };
   for (const [p, ev] of [[f.pA, ruleEvA], [f.pB, ruleEvB]]) {
     const w = putProjectMemories(f.root, p, [{ ...rule, evidence: [ev] }], { rebuild: false });
     assert.equal(w.ok, true, w.errors.join('；'));
@@ -3287,6 +4078,9 @@ test('用户画像：G9 作用域与跨会话门槛，--put --scope user 全有�
   assert.equal(pr.action, 'added');
   assert.equal(pr.sources.length, 2);
   assert.deepEqual(pr.sources.map((s) => s.name).sort(), ['memfixture-a', 'memfixture-b']);
+  const promoted = readUserMemories(f.root).entries.find((e) => e.id === 'U02');
+  assert.equal(promoted.dimension, '验收', '晋升副本要带维度');
+  assert.deepEqual(promoted.scenes, ['test', 'code'], '晋升副本要带场景标签');
   const u2 = readUserMemories(f.root).entries.find((e) => e.id === 'U02');
   assert.equal(u2.class, '规则');
   assert.equal(u2.evidence.length, 2, '晋升要合并两个项目的证据');
@@ -3311,7 +4105,7 @@ test('用户画像：G9 作用域与跨会话门槛，--put --scope user 全有�
   assert.equal(readProjectMemories(f.root, f.pB.key).entries[0].promoted_to, null);
 
   // CLI：晋升 / 撤销 / 写画像 / 素材 / 导出待点头
-  const cli = (args, input) => spawnSync(process.execPath, ['src/cli.mjs', ...args, '--store', f.root], { cwd: tools, encoding: 'utf8', input });
+  const cli = (args, input) => spawnSync(process.execPath, ['src/cli.mjs', ...args, '--store', f.root], { cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, input });
   const cp = cli(['memory', '--promote', 'M01', '--project', f.pA.key]);
   assert.equal(cp.status, 0, cp.stdout + cp.stderr);
   assert.match(cp.stdout, /✓ 已晋升 U02（新建）· 来源 2 个项目/);
@@ -3329,6 +4123,13 @@ test('用户画像：G9 作用域与跨会话门槛，--put --scope user 全有�
   assert.match(cd.stdout, /用户画像（跨项目）/);
   assert.match(cd.stdout, /memfixture-a:mema0000:S\d{2}/);
   assert.match(cd.stdout, /memfixture-b:memb0000:S\d{2}/);
+  const lastUser = readUserMemories(f.root).entries.at(-1);
+  const cf = cli(['memory', '--forget', lastUser.id]);
+  assert.equal(cf.status, 0, cf.stdout + cf.stderr);
+  assert.match(cf.stdout, /已从用户表删除/);
+  assert.equal(readUserMemories(f.root).entries.some((e) => e.id === lastUser.id), false, '--forget 要真删');
+  const cf2 = cli(['memory', '--forget', 'U99']);
+  assert.equal(cf2.status, 1, '删不存在的条目要报错');
   const cx = cli(['memory', '--export', 'note-app']);
   assert.equal(cx.status, 1);
   assert.match(cx.stdout + cx.stderr, /已取消.*convledger export/);
@@ -3373,7 +4174,8 @@ test('导出：项目里两份带元信息的文件，内容变了才存快照�
   writeLedger(2);
   const p = projectsOf(root, { withSteps: false }).projects[0];
   assert.ok(p && p.root === proj, '夹具项目没归组到 proj');
-  const paths = exportPaths(proj);
+  const paths = exportPaths(root, p);
+  assert.ok(paths.dir.replace(/\\/g, '/').startsWith(exportRoot(root).replace(/\\/g, '/')), '导出要收在工具目录 out/exports/projects 下');
 
   const r1 = writeProjectExports(root, p);
   assert.equal(r1.files.filter((f) => f.kind === 'progress' || f.kind === 'profile').length, 2, '进度与画像两份文件都要写');
@@ -3393,6 +4195,7 @@ test('导出：项目里两份带元信息的文件，内容变了才存快照�
   assert.match(fs.readFileSync(paths.index, 'utf8'), /archive\/\d{4}-\d{2}-\d{2}_\d{6}_progress_/, 'INDEX 要列现存快照');
   assert.ok(fs.existsSync(globalIndexFile(root)), '跨项目总索引没写');
   assert.ok(fs.readFileSync(globalIndexFile(root), 'utf8').includes(p.name), '总索引里没有这个项目');
+  assert.ok(!fs.existsSync(`${proj}/convledger-export`), '不许再往项目工作目录里建 convledger-export');
 
   // 内容没变：不重写、不新增快照
   const archives = () => fs.readdirSync(paths.archive).filter((n) => n.includes('_progress_')).length;
@@ -3425,23 +4228,46 @@ test('导出：项目里两份带元信息的文件，内容变了才存快照�
   assert.equal(allSnaps(), 30, `合计只该留 30 份，现在 ${allSnaps()}`);
   assert.ok(fs.existsSync(`${paths.archive}/2020-01-01_手工笔记.md`), '名字像快照的手写文件不许删');
 
-  // 手写的同名文件不覆盖；--force 才覆盖
+  // 手写的同名文件不覆盖；--force 才覆盖（新位置）
   const other = `${base}/proj2`;
-  fs.mkdirSync(`${other}/convledger-export`, { recursive: true });
-  fs.writeFileSync(`${other}/convledger-export/PROGRESS.md`, '# 我自己写的\n');
+  fs.mkdirSync(other, { recursive: true });
   const sid2 = 'ffff6666-0000-0000-0000-000000000000';
   fs.mkdirSync(`${root}/${sid2}`, { recursive: true });
   fs.writeFileSync(`${root}/${sid2}/ledger.json`, JSON.stringify({ sessionId: sid2, runner: 'qoder', cwd: other, builtAt: '2026-10-28T07:00:00.000Z', segments: [{ id: 'S01' }] }));
   const p2 = projectsOf(root, { withSteps: false }).projects.find((x) => x.root === other);
+  const p2paths = exportPaths(root, p2);
+  fs.mkdirSync(p2paths.dir, { recursive: true });
+  fs.writeFileSync(p2paths.progress, '# 我自己写的\n');
   const r5 = writeProjectExports(root, p2);
   assert.ok(r5.skipped.some((x) => x.includes('不覆盖')), '手写的 PROGRESS.md 被覆盖了');
-  assert.equal(fs.readFileSync(`${other}/convledger-export/PROGRESS.md`, 'utf8'), '# 我自己写的\n');
+  assert.equal(fs.readFileSync(p2paths.progress, 'utf8'), '# 我自己写的\n');
   const r6 = writeProjectExports(root, p2, { force: true });
   assert.ok(r6.files.length >= 1, '--force 应该覆盖');
 
+  // 旧位置：check 如实标「旧位置」；导出自动复制过来但不删；--migrate-legacy 才搬走
+  const legacyProj = `${base}/proj3`;
+  fs.mkdirSync(legacyProj, { recursive: true });
+  const sid3 = 'aaaa7777-0000-0000-0000-000000000000';
+  fs.mkdirSync(`${root}/${sid3}`, { recursive: true });
+  fs.writeFileSync(`${root}/${sid3}/ledger.json`, JSON.stringify({ sessionId: sid3, runner: 'qoder', cwd: legacyProj, builtAt: '2026-10-28T07:00:00.000Z', segments: [{ id: 'S01' }] }));
+  const p3 = projectsOf(root, { withSteps: false }).projects.find((x) => x.root === legacyProj);
+  const legacy3 = legacyExportPaths(legacyProj);
+  fs.mkdirSync(`${legacy3.dir}/archive`, { recursive: true });
+  fs.writeFileSync(`${legacy3.dir}/archive/2020-01-01_000000_progress_qoder_x_s1_old.md`, '旧的\n');
+  const c3 = checkExports(root, p3);
+  assert.ok(c3.items.some((x) => x.status === 'legacy'), '旧位置有导出时要如实标 legacy');
+  const r7 = writeProjectExports(root, p3);
+  assert.ok(r7.migrated >= 1, '旧位置的文件要先复制到工具目录');
+  assert.ok(fs.existsSync(`${exportPaths(root, p3).archive}/2020-01-01_000000_progress_qoder_x_s1_old.md`), '旧快照没复制过来');
+  assert.ok(fs.existsSync(legacy3.dir), '自动复制不删旧目录');
+  const m3 = migrateLegacyExports(root, p3);
+  assert.equal(m3.ok, true, m3.reason);
+  assert.ok(!fs.existsSync(legacy3.dir), '--migrate-legacy 之后旧目录要搬走');
+  assert.ok(fs.existsSync(`${exportPaths(root, p3).archive}/2020-01-01_000000_progress_qoder_x_s1_old.md`), '搬走后文件要在新位置');
+
   // CLI：export 落盘 + --list 打印总索引
   const cli = new URL('../bin/convledger.mjs', import.meta.url).pathname.replace(/^\/(\w:)/, '$1').replace(/\\/g, '/');
-  const run = (...a) => spawnSync(process.execPath, [cli, ...a, '--store', root], { encoding: 'utf8', cwd: tools });
+  const run = (...a) => spawnSync(process.execPath, [cli, ...a, '--store', root], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, cwd: tools });
   const ok = run('export', '--project', p.key);
   assert.equal(ok.status, 0, ok.stderr || ok.stdout);
   const list = run('export', '--list');
@@ -3469,6 +4295,226 @@ test('导出：项目里两份带元信息的文件，内容变了才存快照�
   assert.equal(run('export', '--check', '--project', p.key).status, 0, '导出后 check 要回到新鲜');
 
   fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('用量：同一回复只算一次，没上报不记 0，注入与回读分开，缓存只补增量', () => {
+  const base = fixture('usage');
+  const home = `${base}/home`;
+  const qdir = `${home}/.qoder/projects/proj`;
+  const cdir = `${home}/.claude/projects/proj`;
+  const wdir = `${home}/.workbuddy/projects/proj`;
+  const xdir = `${home}/.codex/sessions/2026/11/13`;
+  for (const d of [qdir, cdir, wdir, xdir, `${base}/store/sess1`]) fs.mkdirSync(d, { recursive: true });
+
+  // Qoder：token 全 0，只有 credits；同一 request_id 出现两次只算一次。
+  const qline = (request, credits, ratio) => JSON.stringify({
+    type: 'assistant', message: { id: `m-${request}`, model: 'qfmodel' },
+    usage: { request_id: request, input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, credits, context_usage_ratio: ratio },
+  }) + '\n';
+  fs.writeFileSync(`${qdir}/q1.jsonl`, qline('r1', 1.5, 0.5) + qline('r1', 1.5, 0.5) + qline('r2', 2, 0.9));
+
+  // Claude：同一 message.id 的两条记录带同一份 usage，只能计一次。
+  const cline = (id, input, output, cache) => JSON.stringify({ type: 'assistant', message: { id, model: 'deepseek-flash', usage: { input_tokens: input, output_tokens: output, cache_read_input_tokens: cache, cache_creation_input_tokens: 0 } } }) + '\n';
+  const cfile = `${cdir}/c1.jsonl`;
+  fs.writeFileSync(cfile, cline('c1', 100, 10, 50) + cline('c1', 100, 10, 50) + cline('c2', 200, 20, 0));
+
+  // WorkBuddy：prompt_tokens 含缓存；未缓存输入用 prompt_cache_miss_tokens。
+  const wline = (id, prompt, hit, miss, out, think) => JSON.stringify({
+    type: 'function_call', id,
+    providerData: { messageId: id, requestModelName: 'Hy3', rawUsage: { prompt_tokens: prompt, completion_tokens: out, prompt_cache_hit_tokens: hit, prompt_cache_miss_tokens: miss, prompt_cache_write_tokens: 0, completion_tokens_details: { reasoning_tokens: think } } },
+  }) + '\n';
+  fs.writeFileSync(`${wdir}/w1.jsonl`, wline('w1', 100, 40, 60, 5, 2) + wline('w1', 100, 40, 60, 5, 2) + wline('w2', 50, 0, 50, 7, 0));
+
+  // Codex：本机这版没有 token_count——要写未上报，不能写 0。
+  fs.writeFileSync(`${xdir}/rollout-2026-11-13T00-00-00-codex1.jsonl`,
+    JSON.stringify({ type: 'session_meta', payload: { id: 'codex1', cwd: 'D:/codex-proj' } }) + '\n'
+    + JSON.stringify({ type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] } }) + '\n');
+
+  // 注入探针：只认 action=inject 且 tokens>0；别的动作与 0 token 不计数。
+  fs.writeFileSync(`${base}/hook-probe.jsonl`, [
+    { ts: '2026-11-13T00:00:01.000Z', action: 'inject', event: 'SessionStart', session: 'q1', tokens: 1000, truncated: true, source: 'compact' },
+    { ts: '2026-11-13T00:00:02.000Z', action: 'inject', event: 'PostCompact', session: 'q1', tokens: 2000, truncated: false, source: 'compact' },
+    { ts: '2026-11-13T00:00:03.000Z', action: 'dedupe', event: 'SessionStart', session: 'q1', tokens: 999 },
+    { ts: '2026-11-13T00:00:04.000Z', action: 'inject', event: 'Stop', session: 'q1', tokens: 0 },
+  ].map((x) => JSON.stringify(x)).join('\n') + '\n');
+
+  // 回读 trace：按操作汇总。
+  fs.writeFileSync(`${base}/store/sess1/trace.jsonl`, [
+    { ts: '2026-11-13T00:00:01.000Z', op: 'steps', tokens: 500 },
+    { ts: '2026-11-13T00:00:02.000Z', op: 'body', tokens: 300 },
+    { ts: '2026-11-13T00:00:03.000Z', op: 'notes', tokens: 0 },
+  ].map((x) => JSON.stringify(x)).join('\n') + '\n');
+
+  const saved = { home: process.env.CONVLEDGER_USAGE_HOME, db: process.env.CONVLEDGER_OPENCODE_DB, codex: process.env.CONVLEDGER_CODEX_SRC };
+  process.env.CONVLEDGER_USAGE_HOME = home;
+  process.env.CONVLEDGER_OPENCODE_DB = `${base}/missing-opencode.db`;
+  process.env.CONVLEDGER_CODEX_SRC = `${home}/.codex/sessions`;
+  try {
+    const store = `${base}/store`;
+    const r = usageReport(store);
+    const src = Object.fromEntries(r.sources.map((s) => [s.id, s]));
+
+    assert.equal(src.qoder.tokens, null, 'Qoder 的 token 全 0 时必须写未上报，不能写 0 token');
+    assert.match(src.qoder.reason, /token 字段全为 0/, '未上报要给出为什么');
+    assert.equal(src.qoder.credits, 3.5, '同一 request_id 的 credits 被重复加了');
+    assert.equal(src.qoder.events, 2, '同一 request_id 出现两次只该算一次请求');
+    assert.equal(src.qoder.contextPeak, 0.9);
+
+    assert.equal(src['claude-code'].tokens.input, 300, '同一 message.id 的 usage 被重复加了');
+    assert.equal(src['claude-code'].tokens.cacheRead, 50);
+    assert.equal(src['claude-code'].tokens.output, 30);
+    assert.equal(src['claude-code'].total, 330, '真实用量不含缓存命中');
+    assert.equal(src['claude-code'].all, 380, '含缓存的全部量单列为 all');
+    assert.equal(src['claude-code'].events, 2);
+
+    assert.equal(src.workbuddy.tokens.input, 110, '未缓存输入要用 miss，不是 prompt 全量');
+    assert.equal(src.workbuddy.tokens.cacheRead, 40);
+    assert.equal(src.workbuddy.tokens.output, 12);
+    assert.equal(src.workbuddy.tokens.reasoning, 2, '推理 token 单列，不重复加进 total');
+    assert.equal(src.workbuddy.total, 122, '真实 = 未缓存输入 + 输出（缓存命中不计）');
+    assert.equal(src.workbuddy.all, 162, '含缓存的全量只作参考');
+
+    assert.equal(src.codex.tokens, null, '没有 token_count 的 Codex 必须写未上报');
+    assert.match(src.codex.reason, /token_count/);
+    assert.equal(src.opencode.tokens, null, '读不到的库要写原因，不能写 0');
+    assert.match(src.opencode.reason, /没有 OpenCode 库/);
+
+    assert.equal(r.totals.total, 452, '真实总量只加有上报的两家（Claude 330 + WorkBuddy 122），缓存命中不计');
+    assert.equal(r.totals.all, 542, '含缓存的全量只作参考');
+    assert.equal(r.totals.cacheRead, 90, '缓存命中单列，不进入真实合计');
+    assert.equal(r.totals.reportingSources, 2, '上报来源数要如实');
+    assert.equal(r.totals.missingSources, 3, '未上报来源也要数出来');
+    assert.equal(r.totals.credits, 3.5);
+
+    assert.equal(r.injections.count, 2, '只有 action=inject 且 tokens>0 才算注入');
+    assert.equal(r.injections.tokens, 3000);
+    assert.equal(r.injections.max, 2000);
+    assert.equal(r.injections.truncated, 1);
+    assert.equal(r.injections.bySession[0].session, 'q1', '注入要能按会话聚合');
+    assert.equal(r.injections.recent.length, 2, '每条注入都要留在明细里');
+
+    assert.equal(r.readback.count, 2, '0 token 的回读不该计数');
+    assert.equal(r.readback.tokens, 800);
+    assert.deepEqual(r.readback.byOp.map((x) => x.op), ['steps', 'body'], '回读按 token 从大到小');
+
+    assert.ok(fs.existsSync(`${base}/usage-cache.json`), '用量缓存要落在 store 旁边，下次只补增量');
+    const before = r.scanned.hostFiles;
+    fs.appendFileSync(cfile, cline('c3', 50, 5, 0));
+    const r2 = usageReport(store);
+    const src2 = Object.fromEntries(r2.sources.map((s) => [s.id, s]));
+    assert.equal(r2.scanned.hostFiles, before, '文件数没变');
+    assert.equal(src2['claude-code'].tokens.input, 350, '追加一行后只补增量，结果要和全量扫描一致');
+    assert.equal(src2['claude-code'].tokens.output, 35);
+    assert.equal(r2.totals.total, 507, '增量后真实总量要跟着长（Claude 385 + WorkBuddy 122）');
+    assert.equal(r2.totals.all, 597, '含缓存的全量也跟着长');
+    const r3 = usageReport(store, { force: true });
+    const src3 = Object.fromEntries(r3.sources.map((s) => [s.id, s]));
+    assert.equal(src3['claude-code'].tokens.input, 350, '--refresh 全量重扫也要得到同一结果');
+
+    // CLI：跨会话只读，不要求 --session。
+    const cli = new URL('../bin/convledger.mjs', import.meta.url).pathname.replace(/^\/(\w:)/, '$1').replace(/\\/g, '/');
+    const env = { ...process.env };
+    const jsonRun = spawnSync(process.execPath, [cli, 'usage', '--json', '--store', store], { encoding: 'utf8', env });
+    assert.equal(jsonRun.status, 0, jsonRun.stderr || jsonRun.stdout);
+    const parsed = JSON.parse(jsonRun.stdout);
+    assert.equal(parsed.ok, true);
+    assert.equal(parsed.sources.length, 5);
+    assert.equal(parsed.totals.total, 507);
+    assert.equal(parsed.totals.all, 597);
+    const textRun = spawnSync(process.execPath, [cli, 'usage', '--store', store], { encoding: 'utf8', env });
+    assert.equal(textRun.status, 0, textRun.stderr);
+    assert.match(textRun.stdout, /Qoder：.*未上报/, '文本回执也要写明未上报');
+    assert.match(textRun.stdout, /真实 507/, '文本回执只报真实用量');
+    assert.match(textRun.stdout, /缓存命中 90（不计）/, '缓存命中单列并注明不计');
+    assert.match(textRun.stdout, /credits 3\.5/);
+    const helpRun = spawnSync(process.execPath, [cli, 'help'], { encoding: 'utf8', env });
+    assert.match(helpRun.stdout, /convledger usage/, '帮助里要有 usage');
+  } finally {
+    for (const [k, v] of [['CONVLEDGER_USAGE_HOME', saved.home], ['CONVLEDGER_OPENCODE_DB', saved.db], ['CONVLEDGER_CODEX_SRC', saved.codex]]) {
+      if (v == null) delete process.env[k]; else process.env[k] = v;
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test('工具归因：后台整段、回填后首个调用、工具回合分开，普通对话不计', () => {
+  const base = fixture('usage-attrib');
+  const home = `${base}/home`;
+  const wdir = `${home}/.workbuddy/projects/proj`;
+  const qdir = `${home}/.qoder/projects/proj`;
+  for (const d of [wdir, qdir, `${base}/store`]) fs.mkdirSync(d, { recursive: true });
+  const at = (s) => Date.UTC(2026, 10, 13, 0, 0, s);
+
+  const human = (text, s) => JSON.stringify({ type: 'message', role: 'user', content: [{ type: 'input_text', text }], timestamp: at(s) }) + '\n';
+  const call = (id, miss, out, s, name, args) => JSON.stringify({
+    type: 'function_call', name, arguments: args, timestamp: at(s),
+    providerData: {
+      messageId: id, requestModelName: 'Hy3',
+      rawUsage: { prompt_tokens: miss, completion_tokens: out, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: miss, prompt_cache_write_tokens: 0, completion_tokens_details: { reasoning_tokens: 0 } },
+    },
+  }) + '\n';
+  // 同一真人回合：先调 convledger，再另一次普通工具调用——两次模型调用都算工具回合。
+  fs.writeFileSync(`${wdir}/w-tool.jsonl`,
+    human('请补账', 0) + call('m1', 100, 10, 1, 'Bash', '{"command":"node D:/x/tool/bin/convledger.mjs sync --prepare"}')
+    + call('m2', 50, 5, 2, 'Read', '{"file_path":"D:/x/PROGRESS.md"}')
+    + human('普通聊天', 10) + call('m3', 80, 8, 11, 'Read', '{"file_path":"D:/x/readme.md"}'));
+  // 后台收尾会话：整段都算工具用量，哪怕这次调用没有 convledger 字样。
+  fs.writeFileSync(`${wdir}/w-bg.jsonl`, human('后台收尾', 0) + call('b1', 30, 3, 1, 'Read', '{"file_path":"D:/x/PROGRESS.md"}'));
+  fs.writeFileSync(`${base}/store/internal-sessions.json`, JSON.stringify({ sids: { 'w-bg': { at: '2026-11-13T00:00:00.000Z' } } }));
+  // Qoder 只有 credits：同一工具回合内的两次请求都要算进工具相关 credits。
+  const qline = (id, credits, s, tool) => JSON.stringify({
+    type: 'assistant', timestamp: new Date(at(s)).toISOString(),
+    message: {
+      id, model: 'dfmodel',
+      content: tool ? [{ type: 'tool_use', name: 'Bash', input: { command: 'node D:/x/tool/bin/convledger.mjs progress' } }] : [{ type: 'text', text: 'ok' }],
+    },
+    usage: { request_id: id, input_tokens: 0, output_tokens: 0, credits, context_usage_ratio: 0.2 },
+  }) + '\n';
+  const qhuman = JSON.stringify({ type: 'user', timestamp: new Date(at(0)).toISOString(), humanInput: { text: '补账', mode: 'prompt' }, message: { content: [{ type: 'text', text: '补账' }] } }) + '\n';
+  fs.writeFileSync(`${qdir}/q-tool.jsonl`, qhuman + qline('r1', 2, 1, true) + qline('r2', 1, 2, false) + qhuman + qline('r3', 0.5, 11, false));
+  // 回填探针：0.5 秒后第一个模型调用是 m1，回填实际用量就是 m1 的真实用量。
+  fs.writeFileSync(`${base}/hook-probe.jsonl`, JSON.stringify({ ts: new Date(at(0) + 500).toISOString(), action: 'inject', event: 'SessionStart', session: 'w-tool', tokens: 100 }) + '\n');
+
+  const saved = { home: process.env.CONVLEDGER_USAGE_HOME, db: process.env.CONVLEDGER_OPENCODE_DB, codex: process.env.CONVLEDGER_CODEX_SRC };
+  process.env.CONVLEDGER_USAGE_HOME = home;
+  process.env.CONVLEDGER_OPENCODE_DB = `${base}/missing-opencode.db`;
+  process.env.CONVLEDGER_CODEX_SRC = `${home}/.codex/sessions`;
+  try {
+    const r = usageReport(`${base}/store`);
+    const tool = r.totals.tool;
+    assert.equal(tool.injection.real, 110, '回填实际用量是注入后第一个模型调用（m1）');
+    assert.equal(tool.injection.events, 1);
+    assert.equal(tool.injection.unmatched, 0);
+    assert.equal(tool.background.real, 33, '后台会话整段都算工具用量');
+    assert.deepEqual([tool.background.sessions, tool.background.calls], [1, 1]);
+    assert.equal(tool.turns.real, 55, '同一回合里工具调用之后的模型调用也算工具回合；m1 已归回填，不再重复');
+    assert.equal(tool.turns.turnCount, 2, 'WorkBuddy 与 Qoder 各一个工具回合');
+    assert.equal(tool.ordinary.real, 88, '没用本工具的普通对话不计数');
+    assert.equal(tool.totalReal, 198, '工具相关 = 后台 33 + 回填 110 + 工具回合 55');
+    assert.equal(tool.background.credits, 0);
+    assert.ok(Math.abs(tool.turns.credits - 3) < 1e-9, `Qoder 工具回合 credits 应为 3，实际 ${tool.turns.credits}`);
+    assert.ok(Math.abs(tool.ordinary.credits - 0.5) < 1e-9, '普通对话的 credits 不进工具相关');
+    assert.ok(Math.abs(tool.totalCredits - 3) < 1e-9);
+
+    const w = r.sources.find((s) => s.id === 'workbuddy');
+    assert.deepEqual([w.toolReal, w.backgroundReal, w.injectionReal, w.turnReal, w.ordinaryReal], [198, 33, 110, 55, 88]);
+    const q = r.sources.find((s) => s.id === 'qoder');
+    assert.ok(Math.abs(q.toolCredits - 3) < 1e-9, 'Qoder 工具相关 credits 只算工具回合');
+
+    const wt = r.sessions.find((s) => s.id === 'w-tool');
+    assert.deepEqual([wt.toolReal, wt.toolTurns, wt.toolCalls], [165, 1, 1], '会话级工具用量 = 回填 + 工具回合');
+    assert.equal(r.sessions.find((s) => s.id === 'w-bg').toolReal, 33);
+
+    const cli = new URL('../bin/convledger.mjs', import.meta.url).pathname.replace(/^\/(\w:)/, '$1').replace(/\\/g, '/');
+    const text = spawnSync(process.execPath, [cli, 'usage', '--store', `${base}/store`], { encoding: 'utf8', env: { ...process.env } });
+    assert.equal(text.status, 0, text.stderr);
+    assert.match(text.stdout, /工具相关真实 198 tok · 后台 33 · 回填 110 · 工具回合 55 · 普通对话 88（不计）/);
+  } finally {
+    for (const [k, v] of [['CONVLEDGER_USAGE_HOME', saved.home], ['CONVLEDGER_OPENCODE_DB', saved.db], ['CONVLEDGER_CODEX_SRC', saved.codex]]) {
+      if (v == null) delete process.env[k]; else process.env[k] = v;
+    }
+    fs.rmSync(base, { recursive: true, force: true });
+  }
 });
 
 test('写身份：歧义、错项目、没有 cwd 都是拒绝，不是猜（L1.1 / A05 A08）', () => {
@@ -3769,8 +4815,22 @@ test('prepare 不推进游标：追加放行、改写拒绝，批次身份由素
   fs.rmSync(base, { recursive: true, force: true });
 });
 
-test('记忆表 v2 与发布：v1 备份、未知 schema 拒读、同 operationId 重放不重复（L4 / A13 A15 A17）', () => {
+test('补账素材剔除工具回执与系统控制记录', () => {
+  const s = synthStore({ asks: 2, sid: 'synth-material-01' });
+  const frozen = freezeSource(s.ledger, { fromByte: 0 });
+  const m = materialUnits(frozen, { runner: s.ledger.runner, budget: Number.MAX_SAFE_INTEGER });
+  assert.ok(m.units.length > 0, '过滤后仍要有真人原话/结论/调用摘要');
+  assert.ok(m.units.some((u) => /\[call Edit\]/.test(u.text)), '调用摘要要保留，作为状态变化线索');
+  assert.ok(m.units.some((u) => /第1件/.test(u.text)), '真人原话要保留');
+  assert.ok(!m.units.some((u) => /\[result\]|已写入/.test(u.text)), '工具回执不能进补账素材');
+  assert.ok(!m.units.some((u) => /workspace-directories|runtime-config/.test(u.text)), '控制记录不能进补账素材');
+  assert.ok(m.units.length < frozen.records.length, '过滤后单元数必须少于原始行数');
+  fs.rmSync(s.base, { recursive: true, force: true });
+});
+
+test('记忆表 v2 与发布：v1 备份、未知 schema 拒读、同 operationId 重放不重复（L4 / A13 A15 A17）', (t) => {
   const f = memoryFixture();
+  if (!f.say) { t.skip('CALIBRATION 那段源整份没有中文真人原话（全是英文与工具回执），say 类证据造不出来'); return; }
   const file = `${projectMemoryDir(f.root, f.project.key)}/memories.json`;
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({ schema: 'convledger-memories/1', scope: 'project', project: f.project.key, entries: [{ id: 'M01', class: '规则', topic: '旧', text: '旧的', evidence: [] }] }));
@@ -3786,7 +4846,7 @@ test('记忆表 v2 与发布：v1 备份、未知 schema 拒读、同 operationI
   fs.rmSync(file);
 
   const evr = { sid: f.sid8, seg: 'S01', hash: f.hash.S01, kind: 'claim', quote: '夹具规则一：先测再改' };
-  const evs = { sid: f.sid8, seg: 'S01', hash: f.hash.S01, kind: 'say', quote: '这是我昨天克隆下来的一些项目' };
+  const evs = { sid: f.sid8, seg: f.say.seg, hash: f.hash[f.say.seg], kind: 'say', quote: f.say.quote };
   const cand = { class: '规则', topic: '夹具规则', text: '夹具规则：先写测试再改代码', evidence: [evr, evs] };
 
   const p1 = publishCandidates(f.root, f.project, [cand], { operationId: 'pub-b1' });
@@ -3827,7 +4887,7 @@ test('收尾检查：有未分析素材且本轮有人类消息才提示，同�
   const SID = 'hookstop00000001';
   const src = `${base}/projects/fixture/${SID}.jsonl`;
   fs.mkdirSync(`${base}/projects/fixture`, { recursive: true });
-  fs.writeFileSync(src, fs.readFileSync(FILE, 'utf8').split('\n').filter(Boolean).slice(0, 240).join('\n') + '\n');
+  fs.writeFileSync(src, fs.readFileSync(synthStore({ asks: 20, sid: 'synthclose00001' }).file, 'utf8'));
   const cwd = cwdFromHead(src);
   assert.ok(cwd, '夹具源里该有 cwd');
   const store = `${base}/store`;
@@ -3847,7 +4907,7 @@ test('收尾检查：有未分析素材且本轮有人类消息才提示，同�
 
   const env = { ...process.env, QODER_CONFIG_DIR: base, WORKBUDDY_CONFIG_DIR: `${base}/nowb`, CONVLEDGER_HOOK_STORE: store, CONVLEDGER_HOOK_LOG: `${base}/log.jsonl` };
   const hook = (extra = {}) => spawnSync(process.execPath, ['hooks/ledger-brief.mjs'], {
-    cwd: tools, encoding: 'utf8', env,
+    cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env,
     input: JSON.stringify({ hook_event_name: 'Stop', session_id: SID, transcript_path: src, cwd, stop_hook_active: false, ...extra }),
   });
 
@@ -3858,18 +4918,1198 @@ test('收尾检查：有未分析素材且本轮有人类消息才提示，同�
   assert.match(decision.reason, /sync --prepare --project p-/);
   assert.match(decision.reason, new RegExp(SID.slice(0, 8)));
   assert.ok(!/已提交|已完成|修复了/.test(decision.reason), '提示里不能替 agent 写结论');
+  assert.match(decision.reason, /后台|另起/, '收尾信号要指向后台会话，不在当前对话里逐批磨');
+  assert.match(decision.reason, /真人消息/, '收尾提示要报人话数，而不是只报原始行数');
+  assert.match(decision.reason, /有效素材单元/, '收尾提示要报过滤后的素材单元');
+  assert.match(decision.reason, /工具回执（不进补账素材）/, '工具回执必须明确排除在补账素材之外');
+  assert.doesNotMatch(decision.reason, /条新记录/, '不能继续把原始 JSONL 行数叫成新记录');
 
   const second = hook();
   assert.equal(second.stdout, '', '同一轮（同一批素材、同一人类消息）不能再提示一次');
 
+  // 同一份收尾提示，只把账本 runner 换成 Claude Code：派活文案必须跟着能力表换成
+  // 这家的 Agent 工具，不能把 Qoder 的会话命令或过时的 Task 写给模型（真机 2026-11-13 踩过）。
+  const ledgerFile = `${store}/${SID}/ledger.json`;
+  fs.writeFileSync(ledgerFile, JSON.stringify({ sessionId: SID, runner: 'claude-code', cwd, sourceFile: src }));
+  fs.rmSync(`${store}/${SID}/closeout-prompt.json`, { force: true });
+  const cc = hook();
+  assert.equal(cc.status, 0, cc.stderr);
+  const ccd = JSON.parse(cc.stdout);
+  assert.equal(ccd.decision, 'block');
+  assert.match(ccd.reason, /用 Agent 工具/);
+  assert.match(ccd.reason, /run_in_background: true/);
+  assert.doesNotMatch(ccd.reason, /create_chat_session|用 Task 工具/);
+  fs.writeFileSync(ledgerFile, JSON.stringify({ sessionId: SID, runner: 'qoder', cwd, sourceFile: src }));
+  fs.rmSync(`${store}/${SID}/closeout-prompt.json`, { force: true });
+
   const active = hook({ stop_hook_active: true });
   assert.equal(active.stdout, '', 'stop_hook_active=true 必须放行，防循环');
 
-  // 没有任务状态的项目不提示：先把状态清掉
+  // 还没有任务表：不是不提示，而是提示「从素材建首批任务」——否则项目页永远是空的
   fs.rmSync(`${base}/projects/${key}/progress-state.json`, { force: true });
   fs.rmSync(`${store}/${SID}/closeout-prompt.json`, { force: true });
-  assert.equal(hook().stdout, '', '没有任务模型的项目不该被收尾提示打扰');
+  const boot = hook();
+  assert.equal(boot.status, 0, boot.stderr);
+  const bd = JSON.parse(boot.stdout);
+  assert.equal(bd.decision, 'block', '没有任务表的项目也要提示建表，不能静默跳过');
+  assert.match(bd.reason, /还没有任务表/, '提示要说清这是首次建表');
+  assert.match(bd.reason, /localKey/, '提示要说明首批任务用 localKey 新建');
+  const boot2 = hook();
+  assert.equal(boot2.stdout, '', '同一轮不能重复提示建表');
   fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('收尾与补账各认各的档位：every5 收尾数真人回合，hosts 可逐 Agent 覆盖', () => {
+  const base = fixture('cadence-split');
+  const store = `${base}/store`;
+  fs.mkdirSync(store, { recursive: true });
+  fs.writeFileSync(`${store}/prefs.json`, JSON.stringify({
+    schema: 'convledger-prefs/1',
+    summaryCadence: 'every5',
+    closeoutCadence: 'each',
+    hosts: { workbuddy: { summaryCadence: 'compact', closeoutCadence: 'compact' } },
+  }, null, 1));
+  const qoder = resolvePrefs(store, { runner: 'qoder' });
+  assert.equal(qoder.summaryCadence, 'every5', '综述档位要独立读取');
+  assert.equal(qoder.closeoutCadence, 'each', '收尾档位不能被综述档位替代');
+  const wb = resolvePrefs(store, { runner: 'workbuddy' });
+  assert.equal(wb.summaryCadence, 'compact', 'Agent 级综述覆盖要生效');
+  assert.equal(wb.closeoutCadence, 'compact', 'Agent 级收尾覆盖要生效');
+  assert.deepEqual(HOST_DEFAULTS, {}, '不再给 WorkBuddy 写死内置压缩时；默认跟机器级');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('收尾 every5：3 个真人回合先等，6 个才放行（与缺块补账分开）', () => {
+  const run = (asks, sid) => {
+    const s = synthStore({ asks, sid: `synth${sid.slice(-8)}` });
+    const src = `${s.base}/projects/fixture/${sid}.jsonl`;
+    fs.mkdirSync(`${s.base}/projects/fixture`, { recursive: true });
+    fs.writeFileSync(src, fs.readFileSync(s.file, 'utf8'));
+    const cwd = cwdFromHead(src);
+    const store = `${s.base}/store`;
+    fs.mkdirSync(`${store}/${sid}`, { recursive: true });
+    fs.writeFileSync(`${store}/${sid}/ledger.json`, JSON.stringify({ sessionId: sid, runner: 'qoder', cwd, sourceFile: src }));
+    fs.writeFileSync(`${store}/prefs.json`, JSON.stringify({
+      schema: 'convledger-prefs/1', summaryCadence: 'every5', closeoutCadence: 'every5',
+    }, null, 1));
+    const logFile = `${s.base}/log.jsonl`;
+    const r = spawnSync(process.execPath, ['hooks/ledger-brief.mjs'], {
+      cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+      env: { ...process.env, QODER_CONFIG_DIR: s.base, WORKBUDDY_CONFIG_DIR: `${s.base}/nowb`,
+        CONVLEDGER_HOOK_STORE: store, CONVLEDGER_HOOK_LOG: logFile },
+      input: JSON.stringify({ hook_event_name: 'Stop', session_id: sid, transcript_path: src, cwd, stop_hook_active: false }),
+    });
+    const logs = fs.existsSync(logFile) ? fs.readFileSync(logFile, 'utf8') : '';
+    fs.rmSync(s.base, { recursive: true, force: true });
+    return { out: String(r.stdout || '').trim(), logs };
+  };
+  const three = run(3, 'hookcad00000003');
+  assert.equal(three.out, '', '3 个真人回合还不够 5 轮，收尾不该拦');
+  assert.match(three.logs, /closeout-every5-wait\(3\/5\)/, '收尾要按真人回合报等待，而不是缺块数');
+  const six = run(6, 'hookcad00000006');
+  assert.ok(six.out, '6 个真人回合应当放行收尾');
+  assert.equal(JSON.parse(six.out).decision, 'block', '攒够 5 个真人回合后应派收尾');
+});
+
+test('自我排除：convledger 自己的后台会话（源头带哨兵）不触发收尾，防无限派生', () => {
+  const base = fixture('internal');
+  const SID = 'internalbg000001';
+  const src = `${base}/projects/fixture/${SID}.jsonl`;
+  fs.mkdirSync(`${base}/projects/fixture`, { recursive: true });
+  // 前 8KB 带哨兵即可命中（检查是字节级）；后面接真实记录，保证是段像样的会话
+  fs.writeFileSync(src, '{"note":"convledger-internal"}\n' + fs.readFileSync(FILE, 'utf8').split('\n').filter(Boolean).slice(0, 80).join('\n') + '\n');
+  const store = `${base}/store`;
+  fs.mkdirSync(`${store}/${SID}`, { recursive: true });
+  fs.writeFileSync(`${store}/${SID}/ledger.json`, JSON.stringify({ sessionId: SID, runner: 'qoder', cwd: 'D:/fixture/internal', sourceFile: src }));
+  const env = { ...process.env, QODER_CONFIG_DIR: base, WORKBUDDY_CONFIG_DIR: `${base}/nowb`, CONVLEDGER_HOOK_STORE: store, CONVLEDGER_HOOK_LOG: `${base}/log.jsonl` };
+  const r = spawnSync(process.execPath, ['hooks/ledger-brief.mjs'], {
+    cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env,
+    input: JSON.stringify({ hook_event_name: 'Stop', session_id: SID, transcript_path: src, cwd: 'D:/fixture/internal', stop_hook_active: false }),
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.stdout, '', '源头带 convledger-internal 哨兵的会话不该触发收尾（否则无限派生）');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('端口被占兜底：isPortFree 判得准、findOpenPort 跳过被监听端口顺延到空位', async () => {
+  let srv = null, occupied = null;
+  for (let p = 18800; p < 18840 && !srv; p++) {
+    const s = net.createServer(() => {});
+    try { await new Promise((res, rej) => { s.once('error', rej); s.listen(p, '127.0.0.1', res); }); srv = s; occupied = p; }
+    catch { try { s.close(); } catch { /* 换下一个 */ } }
+  }
+  assert.ok(srv, '找不到可用的测试监听端口');
+  try {
+    assert.equal(await isPortFree(occupied), false, '被监听的端口不能算空闲');
+    const alt = await findOpenPort(occupied);
+    assert.ok(Number.isInteger(alt) && alt > occupied, `8765 被占时应顺延到更大的空位，实际 ${alt}`);
+    assert.equal(await isPortFree(alt), true, '顺延到的端口应空闲');
+  } finally {
+    await new Promise((res) => srv.close(res));
+  }
+});
+
+test('内部会话登记后从会话库与画像统计隐藏（后台工作会话复用，防越开越多）', () => {
+  const base = fixture('internal-reg'); fs.rmSync(base, { recursive: true, force: true });
+  const root = `${base}/store`; fs.mkdirSync(root, { recursive: true });
+  const mk = (id, iso, sentinel) => {
+    const dir = `${root}/${id}`; fs.mkdirSync(dir, { recursive: true });
+    const sf = `${dir}/src.jsonl`;
+    fs.writeFileSync(sf, sentinel ? '{"note":"convledger-internal"}\n' : '{"type":"user","cwd":"D:/f","message":{"content":"hi"}}\n');
+    fs.writeFileSync(`${dir}/ledger.json`, JSON.stringify({ sessionId: id, runner: 'qoder', cwd: 'D:/f', sourceFile: sf, builtAt: new Date().toISOString(), segments: [] }));
+    const t = new Date(iso); fs.utimesSync(sf, t, t);
+  };
+  mk('real-a', '2026-11-01T00:00:00Z', false);
+  mk('real-b', '2026-11-02T00:00:00Z', false);
+  mk('bgworker', '2026-11-03T00:00:00Z', true);
+  addInternal(root, 'bgworker');
+  assert.ok(readInternal(root).sids.bgworker, '内部会话应写进登记表');
+  // worker 按宿主分开：Qoder 的工人不能被 OpenCode 拿去续派
+  setWorker(root, 'bgworker', 'opencode');
+  assert.equal(getWorker(root, 'opencode'), 'bgworker', 'OpenCode 的工人要记在 opencode 名下');
+  assert.equal(getWorker(root), null, '设 OpenCode 工人不能覆盖默认（Qoder）工人');
+  setWorker(root, 'bgworker');
+  assert.equal(getWorker(root), 'bgworker', '默认工人照常可设');
+  assert.equal(getWorker(root, 'opencode'), 'bgworker', '两个宿主互不干扰');
+  const ids = libraryOf(root).groups.flatMap((g) => g.sessions.map((s) => s.id));
+  assert.ok(!ids.includes('bgworker'), '内部会话不应出现在会话库');
+  assert.ok(ids.includes('real-a') && ids.includes('real-b'), '真实会话照常列出');
+  const d = profileDue(root);
+  assert.equal(d.due, true, '两段真实新会话仍触发画像');
+  assert.equal(d.newer, 2, '内部会话不计入画像「新会话」');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('第五个来源 Codex：rollout（信封格式+嵌套）投影→识别→建账', () => {
+  const base = fixture('codex-src'); fs.rmSync(base, { recursive: true, force: true });
+  const day = `${base}/sessions/2026/11/11`; fs.mkdirSync(day, { recursive: true });
+  const sid = 'codex-0001';
+  const R = (type, payload, ts) => JSON.stringify({ type, payload, timestamp: ts });
+  const lines = [
+    R('session_meta', { session_id: sid, id: sid, cwd: 'D:/codex-proj' }, '2026-11-11T01:00:00Z'),
+    R('response_item', { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'You are Codex.' }] }, '2026-11-11T01:00:01Z'),
+    R('response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<environment_context>\n<cwd>D:/codex-proj</cwd>\n</environment_context>' }] }, '2026-11-11T01:00:02Z'),
+    R('response_item', { type: 'message', role: 'user', content: [{ type: 'input_text', text: '请把这段说明写清楚一点' }] }, '2026-11-11T01:00:03Z'),
+    R('response_item', { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '好的，我先列出要点。' }] }, '2026-11-11T01:00:04Z'),
+    R('response_item', { type: 'function_call', call_id: 'call_1', name: 'shell', arguments: '{"command":"ls"}' }, '2026-11-11T01:00:05Z'),
+    R('response_item', { type: 'function_call_output', call_id: 'call_1', output: 'a.txt\nb.txt' }, '2026-11-11T01:00:06Z'),
+  ];
+  fs.writeFileSync(`${day}/rollout-x-${sid}.jsonl`, lines.join('\n') + '\n');
+
+  const outDir = `${base}/out`;
+  const r = syncCodexProjections({ srcDir: `${base}/sessions`, outDir, force: true });
+  assert.ok(r.ok, `投影失败：${r.error}`);
+  assert.equal(r.written, 1, '应投影出 1 段会话');
+  const proj = `${outDir}/${sid}/${sid}.jsonl`;
+  assert.ok(fs.existsSync(proj), '投影文件应生成（out/codex/<sid>/<sid>.jsonl）');
+
+  const built = build(proj);
+  assert.equal(built.ledger.runner, 'codex', '应识别为 codex 来源');
+  assert.ok(built.facts.turns.human >= 1, '真请求要算 1 个人类回合（environment_context 不算）');
+  assert.ok(built.facts.toolCalls.total >= 1, 'function_call 要算成 1 次工具调用');
+
+  // 未变不重写（mtime+size 去重）
+  const again = syncCodexProjections({ srcDir: `${base}/sessions`, outDir, force: false });
+  assert.equal(again.written, 0, '同一段没变不该重投影');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('断开 Skill：Junction 只解链接，共用的真本原样保留（真机踩过的那条）', () => {
+  const base = fixture('unlink-safe');
+  const real = path.join(base, 'real');
+  fs.mkdirSync(real, { recursive: true });
+  const body = '真本内容：卸载动作不许删到这里';
+  fs.writeFileSync(path.join(real, 'SKILL.md'), body);
+  const wb = path.join(base, 'home', '.workbuddy');
+  fs.mkdirSync(path.join(wb, 'skills'), { recursive: true });
+  const link = path.join(wb, 'skills', 'convledger');
+  fs.symlinkSync(real, link, process.platform === 'win32' ? 'junction' : 'dir');
+  assert.ok(fs.existsSync(path.join(link, 'SKILL.md')), '前提：链接能读到真本');
+
+  const r = spawnSync(process.execPath, [`${tools}/skill/install.mjs`, '--client', 'workbuddy', '--remove'], {
+    cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env: { ...process.env, WORKBUDDY_CONFIG_DIR: wb },
+  });
+  assert.equal(r.status, 0, `卸载应成功：${r.stderr || r.stdout}`);
+  assert.ok(!fs.existsSync(link), '链接本身应被解除');
+  assert.ok(fs.existsSync(path.join(real, 'SKILL.md')), '真本必须还在——顺着链接删进去就是事故');
+  assert.equal(fs.readFileSync(path.join(real, 'SKILL.md'), 'utf8'), body, '真本内容一个字节都不该变');
+});
+
+test('断开 Skill：父级是共享目录链接时拒绝穿透（单源技能总仓那种布局）', () => {
+  const base = fixture('shared-parent');
+  const pool = path.join(base, 'pool', 'skills');
+  fs.mkdirSync(path.join(pool, 'convledger'), { recursive: true });
+  fs.writeFileSync(path.join(pool, 'convledger', 'SKILL.md'), '共享真本，不许删');
+  const codex = path.join(base, 'home', '.codex');
+  fs.mkdirSync(codex, { recursive: true });
+  const skills = path.join(codex, 'skills');
+  fs.symlinkSync(pool, skills, process.platform === 'win32' ? 'junction' : 'dir');
+  // 这就是陷阱：子目录本身看着是普通目录，只有往上找才看得见那层链接
+  assert.equal(fs.lstatSync(path.join(skills, 'convledger')).isSymbolicLink(), false, '前提：convledger 本身不是链接');
+
+  const r = spawnSync(process.execPath, [`${tools}/skill/install.mjs`, '--client', 'codex', '--remove'], {
+    cwd: tools, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, env: { ...process.env, CODEX_HOME: codex },
+  });
+  assert.equal(r.status, 0, `接入器应正常退出：${r.stderr || r.stdout}`);
+  assert.match(String(r.stdout || ''), /不动|共享/, '回执要说明为什么不动');
+  assert.ok(fs.existsSync(path.join(pool, 'convledger', 'SKILL.md')), '共享真本必须原样保留');
+  assert.equal(fs.readFileSync(path.join(pool, 'convledger', 'SKILL.md'), 'utf8'), '共享真本，不许删');
+});
+
+test('连接状态分层：hooks 与 Skill 分开算，isOff 只认这两层', async () => {
+  const base = fixture('conn-state');
+  const root = path.join(base, 'store');
+  fs.mkdirSync(root, { recursive: true });
+  const home = path.join(base, 'home');
+  const wb = path.join(home, '.workbuddy');
+  fs.mkdirSync(path.join(wb, 'skills', 'convledger'), { recursive: true });
+  fs.writeFileSync(path.join(wb, 'skills', 'convledger', 'SKILL.md'), '# x');
+  fs.writeFileSync(path.join(wb, 'settings.json'), JSON.stringify({
+    hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'node .../ledger-brief.mjs --origin host' }] }] },
+  }));
+
+  const on = await connectionState({ root, home, env: { WORKBUDDY_CONFIG_DIR: wb }, port: 59997 });
+  assert.equal(on.hooks.find((h) => h.id === 'workbuddy').count, 1, '钩子条目应计到 1 条');
+  assert.equal(on.skills.find((x) => x.client === 'workbuddy').mounted, true, 'Skill 目录在＝已挂');
+  assert.equal(isOff(on), false, '两层都挂时不能算断开');
+
+  // 只拆一层：Skill 已挂、钩子 0 条 → 仍是连接态（宿主还会按 Skill 调用）
+  fs.writeFileSync(path.join(wb, 'settings.json'), JSON.stringify({ hooks: {} }));
+  const half = await connectionState({ root, home, env: { WORKBUDDY_CONFIG_DIR: wb }, port: 59997 });
+  assert.equal(half.hooks.find((h) => h.id === 'workbuddy').count, 0, '钩子应归零');
+  assert.equal(isOff(half), false, '只断一层不算断开——这正是以前看不出来的半挂状态');
+
+  fs.rmSync(path.join(wb, 'skills', 'convledger'), { recursive: true, force: true });
+  const off = await connectionState({ root, home, env: { WORKBUDDY_CONFIG_DIR: wb }, port: 59997 });
+  assert.equal(isOff(off), true, '两层都空才算断开');
+});
+
+test('块名不吃 hook 注入文本：压缩提示不能冒充「这一块里第一句人话」', () => {
+  assert.ok(NOSAY.test('[convledger · 收尾检查] 这个项目还没有任务表'), '注入文本要过这把筛子');
+  assert.ok(NOSAY.test('[convledger · 后台补账] 本会话有 3 块已收口但缺综述'), '补账提示同样');
+  assert.ok(!NOSAY.test('把这个按钮改大一点'), '正常的人话不能被误伤');
+
+  const nodes = [
+    { id: 'S01', say: '[convledger · 收尾检查] 这个项目还没有任务表', task: 't1', t0: 1, t1: 2, files: [], branches: [] },
+    { id: 'S02', say: '把这个按钮改大一点', task: 't1', t0: 3, t1: 4, files: [], branches: [] },
+  ];
+  const asks = [{ id: 'S01', who: '你', count: 1 }, { id: 'S02', who: '你', count: 1 }];
+  const { steps } = stepsOf(nodes, asks, [], []);
+  assert.equal(steps.length, 1, '两段同一块');
+  assert.equal(steps[0].say, '把这个按钮改大一点', '块名要跳过注入文本，取真正的人话——否则压缩后注入回新上下文的就是一句工具自己的提示');
+});
+
+test('新接入默认不建历史：后台档位是「关」，setup 只建当前这一段', () => {
+  const fresh = readPrefs(fixture('prefs-default'));
+  assert.equal(fresh.autoBuild, 'off', '默认档位必须是关——新机器接入不许在后台把历史全建一遍');
+  assert.equal(AUTO_BUILD_MODES[0], 'off', '档位列表第一项是关，界面下拉的默认落点才对');
+
+  const r = spawnSync(process.execPath, [`${tools}/bin/convledger.mjs`, 'setup', '--check'], {
+    cwd: tools, encoding: 'utf8', timeout: 120000,
+    env: { ...process.env, CONVLEDGER_NO_RESIDENT_HUB: '1' },
+  });
+  const text = String(r.stdout || '') + String(r.stderr || '');
+  assert.match(text, /只建当前这一段（默认，历史不建）/, '计划里要写明只建当前一段');
+  assert.ok(!/最近 20/.test(text), '不该再出现「最近 20 段账」');
+
+  // 按 Agent 选装：--client qoder 只计划 Qoder，别家标「不装」，不许一键全装
+  const rq = spawnSync(process.execPath, [`${tools}/bin/convledger.mjs`, 'setup', '--check', '--client', 'qoder'], {
+    cwd: tools, encoding: 'utf8', timeout: 120000,
+    env: { ...process.env, CONVLEDGER_NO_RESIDENT_HUB: '1' },
+  });
+  const tq = String(rq.stdout || '') + String(rq.stderr || '');
+  assert.match(tq, /只装：Qoder/, '--client qoder 要只装 Qoder');
+  assert.match(tq, /计划：Skill Qoder · hooks Qoder/, '--client qoder 的安装计划只能有 Qoder');
+  assert.ok(!/计划：Skill .*Claude Code/.test(tq), '--client qoder 不许把别家也列进安装计划');
+  // 未知 Agent 要报错退出，不能悄悄装全部
+  const rb = spawnSync(process.execPath, [`${tools}/bin/convledger.mjs`, 'setup', '--check', '--client', 'bogus'], {
+    cwd: tools, encoding: 'utf8', timeout: 120000,
+    env: { ...process.env, CONVLEDGER_NO_RESIDENT_HUB: '1' },
+  });
+  assert.equal(rb.status, 1, '未知 Agent 要非零退出');
+  assert.match(String(rb.stdout || '') + String(rb.stderr || ''), /未知 Agent/, '要明说未知 Agent');
+});
+
+
+test('补账分小批：只补最近的几块、逐轮往前，不许一次全补', () => {
+  const src = fs.readFileSync(new URL('../hooks/ledger-brief.mjs', import.meta.url), 'utf8');
+  assert.match(src, /pickSummaryBatch\(/, '要用分批函数，别一次全补');
+  assert.match(src, /本轮只补最近的 \$\{batch\.length\} 块/, '提示要写明本轮只补最近几块');
+  assert.match(src, /digest --block \$\{batch\.join\(','\)\}/, '取材要按本轮批次给 --block，不是全拿');
+  assert.ok(!/一次拿全部缺块|不带 \*\*--block\*\*/.test(src), '旧的「一次全补」文案必须清掉');
+  assert.match(src, /summarise --put - --session/, '落盘仍是 summarise --put -（合并式，只写本轮几块）');
+  // 分批规则：每轮最多 4 块；进入往日积压每轮 1 块；欠账少也不一次全补
+  const r = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
+  assert.deepEqual(pickSummaryBatch(r(1, 63), 63), [60, 61, 62, 63], '全缺 1..63：本轮只补最近 4 块');
+  assert.deepEqual(pickSummaryBatch(r(1, 59), 63), [59], '已进入往日积压：每轮只往前补 1 块');
+  assert.deepEqual(pickSummaryBatch(r(1, 8), 8), [5, 6, 7, 8], '欠账 8 块也只补最近 4 块，不一次全补');
+  assert.deepEqual(pickSummaryBatch(r(1, 3), 3), [1, 2, 3], '欠账 ≤4 块时本轮补完，但上限仍是 4');
+});
+
+test('协作画像随 brief 注入：按维度去重，只挑「怎么配合他」那几类', () => {
+  const base = fixture('collab-brief');
+  const root = path.join(base, 'store');
+  fs.mkdirSync(root, { recursive: true });
+  const userDir = path.join(base, 'user');
+  fs.mkdirSync(userDir, { recursive: true });
+  fs.writeFileSync(path.join(userDir, 'memories.json'), JSON.stringify({
+    schema: MEMORIES_SCHEMA, scope: 'user', revision: 1, appliedOperations: [], history: [],
+    entries: [
+      { id: 'U01', class: '画像', topic: 'a', text: '验收看真跑通，只有外形能点不算做完。', dimension: '验收' },
+      { id: 'U02', class: '画像', topic: 'b', text: '附件与导出不许落在库根。', dimension: '边界' },
+      { id: 'U03', class: '画像', topic: 'c', text: '第二条验收类不该顶掉别的维度。', dimension: '验收' },
+    ],
+  }));
+
+  const c = collabBrief(root, 'p-test');
+  assert.equal(c.length, 2, '默认取两条，不能把整张表塞进注入');
+  assert.deepEqual(c.map((x) => x.tag), ['验收', '边界'], '按维度优先级排，且同一维度只取一条');
+
+  const text = briefText({ mainSteps: 1, steps: [], tasks: [], phases: [], chapters: [], nodes: [] }, [], c);
+  assert.ok(text.includes('协作（这个人在这类事上要的'), 'brief 里要有这一段的抬头');
+  assert.ok(text.includes('附件与导出不许落在库根'), '条目正文要进来');
+  const empty = briefText({ mainSteps: 1, steps: [], tasks: [], phases: [], chapters: [], nodes: [] }, [], []);
+  assert.ok(!empty.includes('协作（这个人'), '没有画像时不许冒出空段');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('协作画像按当前任务选相关条目，验收/边界/反馈不丢', () => {
+  const base = fixture('collab-task');
+  const root = path.join(base, 'store');
+  fs.mkdirSync(root, { recursive: true });
+  const userDir = path.join(base, 'user');
+  fs.mkdirSync(userDir, { recursive: true });
+  const userEntries = [
+    { id: 'U01', class: '画像', dimension: '验收', text: '提交前要跑全量测试。', at: '2026-11-01' },
+    { id: 'U02', class: '画像', dimension: '边界', text: '只改点名的文件。', at: '2026-11-01' },
+    { id: 'U03', class: '画像', dimension: '反馈', text: '先给结论再给细节。', at: '2026-11-01' },
+    { id: 'U04', class: '画像', dimension: '偏好', text: '画布要能拖拽缩放。', scenes: ['ui'], at: '2026-11-01' },
+    { id: 'U05', class: '画像', dimension: '背景', text: '做过电路设计。', at: '2026-11-01' },
+    { id: 'U06', class: '画像', dimension: '目标', text: '文档要写清迁移步骤。', scenes: ['docs'], at: '2026-11-01' },
+    { id: 'U07', class: '画像', dimension: '偏好', text: '海报只用本地字体。', scenes: ['graphic'], at: '2026-11-01' },
+    { id: 'U08', class: '画像', dimension: '规则', text: '海报先出黑白稿再上色。', scenes: ['graphic'], at: '2026-11-01' },
+  ];
+  fs.writeFileSync(path.join(userDir, 'memories.json'), JSON.stringify({
+    schema: MEMORIES_SCHEMA, scope: 'user', revision: 1, appliedOperations: [], history: [], entries: userEntries,
+  }));
+  const projDir = path.join(base, 'projects', 'p-task');
+  fs.mkdirSync(projDir, { recursive: true });
+  fs.writeFileSync(path.join(projDir, 'memories.json'), JSON.stringify({
+    schema: MEMORIES_SCHEMA, scope: 'project', project: 'p-task', revision: 1, appliedOperations: [], history: [],
+    entries: [{ id: 'M01', class: '规则', dimension: '目标', text: '这个项目先做导出。', at: '2026-11-01' }],
+  }));
+
+  const a = collabBrief(root, 'p-task', { scenes: ['ui'] });
+  const at = a.map((x) => x.tag);
+  for (const core of ['验收', '边界', '反馈']) assert.ok(at.includes(core), `核心维度 ${core} 不能丢`);
+  assert.ok(a.some((x) => /画布要能拖拽缩放/.test(x.text)), 'UI 场景要选到带 ui 标签的画像');
+  assert.ok(!a.some((x) => /电路设计/.test(x.text)), '不相关背景不该占注入名额');
+  assert.ok(!a.some((x) => /迁移步骤/.test(x.text)), '带 docs 标签的条目不在 UI 场景里凑数');
+  assert.ok(!a.some((x) => /本地字体/.test(x.text)), '带 graphic 标签的条目不能靠维度兜底混进 UI 场景');
+  assert.ok(a.some((x) => /这个项目先做导出/.test(x.text)), '项目规则不按用户场景过滤');
+
+  const b = collabBrief(root, 'p-task', { scenes: ['docs'] });
+  assert.ok(b.some((x) => /迁移步骤/.test(x.text)), '文档场景要换到带 docs 标签的画像');
+  assert.ok(!b.some((x) => /画布要能拖拽缩放/.test(x.text)), 'UI 条目不继续占文档场景');
+
+  const g = collabBrief(root, 'p-task', { scenes: ['graphic'] });
+  assert.ok(g.some((x) => /本地字体/.test(x.text)), '平面场景要选到带 graphic 标签的画像');
+  assert.ok(g.some((x) => /黑白稿/.test(x.text)), '同一场景可以命中多条不同维度的画像');
+  assert.ok(!g.some((x) => /画布要能拖拽缩放/.test(x.text)), '显式标签优先于维度兜底');
+
+  const hybrid = collabBrief(root, 'p-task', { scenes: ['ui'], context: '迁移步骤' });
+  assert.ok(hybrid.some((x) => /迁移步骤/.test(x.text)), '关键词命中可以越过场景标签补进来');
+  const hybrid2 = collabBrief(root, 'p-task', { scenes: ['ui'], context: '海报先出黑白稿' });
+  assert.ok(hybrid2.some((x) => /黑白稿/.test(x.text)), '关键词命中也能把别的场景条目拉进来');
+
+  const scenes = briefScenes({
+    steps: [{ step: 3, dominant: 'PT1', sum: { title: '画布拖拽' } }],
+    phases: [{ from: 1, to: 3, short: '界面', doing: '调画布' }],
+    tasks: [{ id: 'PT1', title: '画布交互' }],
+  }, [{ id: 'R1', text: '还要能缩放', done: false }]);
+  assert.ok(scenes.includes('ui'), 'briefScenes 要认出画布/界面场景');
+  const poster = briefScenes({ steps: [{ step: 1, sum: { title: '做展览海报设计' } }], phases: [], tasks: [] }, []);
+  assert.ok(poster.includes('design') && poster.includes('graphic'), '海报设计要识别成设计/平面场景');
+  const testPlan = briefScenes({ steps: [{ step: 1, sum: { title: '做测试计划' } }], phases: [], tasks: [] }, []);
+  assert.ok(testPlan.includes('plan') && testPlan.includes('test'), '测试计划要同时识别计划与测试');
+  const toolHabit = briefScenes({ steps: [{ step: 1, sum: { title: '使用工具的习惯' } }], phases: [], tasks: [] }, []);
+  assert.ok(toolHabit.includes('tooling') || toolHabit.includes('tool-choice'), '工具使用要识别工具/习惯场景');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('记忆归纳按增量触发：攒够经验块或会话才到期，判据不看日历', () => {
+  const base = fixture('memory-due');
+  const root = path.join(base, 'store');
+  const projKey = 'p-000000000001';
+  const projDir = path.join(base, 'projects', projKey);
+  fs.mkdirSync(projDir, { recursive: true });
+  const sid = 'aaaaaaaa-0000-0000-0000-000000000001';
+  const dir = path.join(root, sid);
+  fs.mkdirSync(dir, { recursive: true });
+  const src = path.join(base, 's.jsonl');
+  fs.writeFileSync(src, '{"x":1}\n');
+  fs.writeFileSync(path.join(dir, 'ledger.json'), JSON.stringify({ sessionId: sid, sourceFile: src, builtAt: new Date().toISOString() }));
+
+  const writeSums = (n) => {
+    const blocks = {};
+    for (let i = 1; i <= n; i++) blocks[String(i)] = { segs: ['S01'], hash: 'h' + i, lesson: '经验 ' + i, at: new Date().toISOString() };
+    fs.writeFileSync(path.join(dir, 'summaries.json'), JSON.stringify({ blocks }));
+  };
+  fs.writeFileSync(path.join(projDir, 'progress-state.json'), JSON.stringify({ checkpoints: { [sid]: {} } }));
+
+  // 记忆表为空 + 只有 3 条经验 → 不够（阈值 8）
+  writeSums(3);
+  let d = memoryDue(root, projKey);
+  assert.equal(d.project.due, false, '3 条经验不够触发归纳');
+  assert.equal(d.project.lessons, 3, '计数要如实');
+
+  // 攒到 8 条 → 到期
+  writeSums(8);
+  d = memoryDue(root, projKey);
+  assert.equal(d.project.due, true, '8 条带经验的块该触发项目记忆归纳');
+  assert.equal(d.project.lessons, 8);
+
+  // 刚归纳过（表里有更晚的条目）→ 增量归零
+  fs.writeFileSync(path.join(projDir, 'memories.json'), JSON.stringify({
+    schema: MEMORIES_SCHEMA, scope: 'project', revision: 1, appliedOperations: [], history: [],
+    entries: [{ id: 'P01', class: '经验', topic: 'x', text: '刚归纳过的一条。', at: new Date(Date.now() + 1000).toISOString() }],
+  }));
+  d = memoryDue(root, projKey);
+  assert.equal(d.project.lessons, 0, '归纳时间之后才算新增');
+  assert.equal(d.project.due, false, '刚归纳完不该立刻又催');
+
+  // 会话数够也算到期（阈值 3 个新会话）
+  assert.ok(MEMORY_PROJECT_SESSION_DUE === 3, '会话阈值是启动值 3');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('宿主派活走能力表：五档各出各的文案，覆盖文件改一家不动代码', () => {
+  const caps = { ...DEFAULT_CAPS };
+  const sess = dispatchFor('qoder', caps);
+  assert.ok(sess.includes('后台工作会话') && sess.includes('create_chat_session'), '独立会话通道要给出开新会话的办法');
+  assert.ok(!sess.includes('子代理'), '独立会话通道不该提子代理');
+
+  const asyncTxt = dispatchFor('workbuddy', caps);
+  assert.ok(asyncTxt.includes('run_in_background: true'), '异步子代理通道要带异步参数');
+  assert.ok(asyncTxt.includes('不要等它'), '异步通道必须写「派完就走」');
+
+  assert.ok(dispatchFor('codex', caps).includes('什么都不做'), '不派通道要明确允许「不做」');
+  assert.ok(dispatchFor('some-new-host', caps).includes('什么都不做'), '表里没有的宿主按不派处理，不猜它的工具名');
+  assert.ok(dispatchFor('x', { x: { channel: 'subagent-sync', tool: 'Task' } }).includes('占住本轮'), '同步通道要把代价写出来');
+
+  // 插件自动派：agent 什么都不该做（再派一次只会多开一段重复会话）
+  const plug = dispatchFor('opencode', caps);
+  assert.ok(plug.includes('插件自己派活') && plug.includes('不必做任何事'), '插件通道要明确 agent 不用做');
+  assert.ok(!plug.includes('run_in_background'), '插件通道不该给 agent 异步子代理的参数指令（文案里「不要另开子代理」是否定式，允许）');
+
+  const base = fixture('host-caps');
+  const root = path.join(base, 'store');
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(base, 'host-caps.json'), JSON.stringify({
+    hosts: { 'claude-code': { channel: 'none', verified: '本机实测：不等待会丢结果' } },
+  }));
+  const loaded = loadCaps(root);
+  assert.equal(loaded.caps['claude-code'].channel, 'none', '覆盖文件要能改通道');
+  assert.equal(loaded.caps['claude-code'].overridden, true, '要标记这行来自覆盖');
+  assert.equal(loaded.caps.qoder.channel, 'session', '没写的继续用默认表');
+  assert.ok(dispatchFor('claude-code', loaded.caps).includes('什么都不做'), '覆盖后文案跟着变');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('upgrade：版本水位与常驻进程任一落后都要提示，一致时闭嘴', () => {
+  assert.equal(noticeFor({ head: 'abc', deployedHead: 'abc', hubStart: 9000, stamp: 8000 }), false, '水位一致且 hub 新于源码：不提示');
+  assert.equal(noticeFor({ head: 'abc', deployedHead: 'old', hubStart: 9000, stamp: 8000 }), true, '拉了新代码没登记：要提示');
+  assert.equal(noticeFor({ head: 'abc', deployedHead: null, hubStart: 9000, stamp: 8000 }), true, '从没登记过：要提示');
+  assert.equal(noticeFor({ head: 'abc', deployedHead: 'abc', hubStart: 1000, stamp: 8000 }), true, '水位一致但 hub 早于源码：要提示');
+  assert.equal(noticeFor({ head: null, deployedHead: 'abc', hubStart: 9000, stamp: 8000 }), false, '非 git 检出且进程不落后：不误报');
+});
+
+test('upgrade：水位可读写，源码时间只认源码面不认 out 派生', () => {
+  const tool = fixture('upgrade');
+  fs.mkdirSync(path.join(tool, 'src'), { recursive: true });
+  const src = path.join(tool, 'src', 'a.mjs');
+  fs.writeFileSync(src, 'export const a = 1;\n');
+  const first = sourceStamp(tool);
+  assert.ok(first > 0, '源码文件要能算出时间');
+
+  writeDeploy(tool, { head: 'abc1234', hubStartedAt: '2026-11-13T00:00:00.000Z' });
+  assert.equal(readDeploy(tool).head, 'abc1234', '水位写进去要能原样读回');
+  assert.equal(readDeploy(tool).hubStartedAt, '2026-11-13T00:00:00.000Z');
+
+  // out/ 是每 20s 就在写的派生目录；把它推到未来也不能让工作台永远判成落后。
+  const noisy = path.join(tool, 'out', 'noisy.txt');
+  fs.writeFileSync(noisy, 'x');
+  const future = new Date(Date.now() + 86400000);
+  fs.utimesSync(noisy, future, future);
+  assert.equal(sourceStamp(tool), first, 'out 下的新文件不得影响源码时间');
+  assert.equal(deployFile(tool), path.join(tool, 'out', 'state', 'deploy.json'));
+  fs.rmSync(tool, { recursive: true, force: true });
+});
+
+test('upgrade：命令在帮助里，--check --json 报告三项且只读', () => {
+  const help = fs.readFileSync(new URL('../src/cli.mjs', import.meta.url), 'utf8');
+  assert.match(help, /convledger upgrade \[--check\]/, '帮助里要有 upgrade，命令表才认得它');
+  // 用一个没人监听的端口：hub 必然判落后，且绝不碰真 8765。
+  const statePath = path.join(tools, 'out', 'state', 'deploy.json');
+  const beforeState = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : null;
+  // 本机暂停标记会把「hub 没在跑」当作预期状态、从而不报不同步；这条用例要验的是
+  // 「有不同步项就返回非零」，所以跑检查时临时移开标记，跑完原样恢复（不影响真状态）。
+  const pause = path.join(tools, 'out', 'HUB-PAUSED');
+  const savedPause = fs.existsSync(pause) ? fs.readFileSync(pause) : null;
+  if (savedPause) fs.rmSync(pause);
+  let r;
+  try {
+    r = spawnSync(process.execPath, ['src/cli.mjs', 'upgrade', '--check', '--json', '--port', '59999'],
+      { cwd: tools, encoding: 'utf8', maxBuffer: BIG_BUF });
+  } finally {
+    if (savedPause) fs.writeFileSync(pause, savedPause);
+  }
+  assert.equal(r.status, 1, '有不同步项时 --check 要返回非零，脚本才能判断');
+  const j = JSON.parse(r.stdout);
+  assert.deepEqual(j.items.map((i) => i.name), ['skills', 'hub', 'deploy'], '三项分别是副本／常驻进程／水位');
+  assert.equal(j.ok, false);
+  assert.match(j.items.find((i) => i.name === 'hub').detail, /端口 59999/, '不用真端口也要如实说没在跑');
+  assert.deepEqual(j.actions, [], '--check 不能有任何动作');
+  const afterState = fs.existsSync(statePath) ? fs.readFileSync(statePath, 'utf8') : null;
+  assert.equal(afterState, beforeState, '只读检查不改水位文件');
+});
+
+test('去常驻：宿主 hook 不再补起工作台，hub 自带门禁与人走灯灭（2026-11-14 口径）', () => {
+  const src = fs.readFileSync(new URL('../hooks/ledger-brief.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(src, /ensureHubFromHost/, 'hook 不再拉起/保活 hub——后台常驻下线');
+  assert.doesNotMatch(src, /'--serve'/, 'hook 不再 spawn hub 进程');
+  const map = fs.readFileSync(new URL('../src/map.mjs', import.meta.url), 'utf8');
+  assert.match(map, /人走灯灭/, 'hub 要自带空闲退出，不留常驻后台');
+  assert.match(map, /timingSafeEqual/, '门禁校验要恒时比较，别用 === 比密钥');
+  assert.match(map, /只对桌面应用窗口开放/, '无 token 请求要 403，浏览器 Web 入口下线');
+  assert.match(map, /token: hubToken/, 'serveMap 要把 token 交回给启动方');
+  const setup = fs.readFileSync(new URL('../src/setup.mjs', import.meta.url), 'utf8');
+  assert.match(setup, /export function readHubToken\(/, '启动方要有读 token 的入口');
+  assert.match(setup, /Open the convledger app window/, '快捷方式描述别再承诺浏览器入口');
+});
+
+test('拉完代码自动升级：post-merge 安装幂等、不覆盖别人的 hook、卸载只摘自己', () => {
+  const repo = fixture('git-hook');
+  fs.mkdirSync(repo, { recursive: true });
+  // 必须是独立仓库：hooksDir 走 git rev-parse，夹具在仓库内会把壳写进真 .git/hooks。
+  assert.equal(spawnSync('git', ['init', '-q'], { cwd: repo, encoding: 'utf8' }).status, 0, '临时夹具要 git init 成功');
+  const file = hookFile(repo);
+  assert.ok(path.resolve(file).startsWith(path.resolve(repo)), 'hooks 路径只能落在临时夹具里');
+
+  assert.equal(installGitHook(repo).action, 'created');
+  assert.equal(hookState(repo).mode, 'owned');
+  const body = fs.readFileSync(file, 'utf8');
+  assert.match(body, /^#!\/bin\/sh/);
+  assert.match(body, /convledger-git-post-merge-own/);
+  assert.match(body, /exec "\$CL_NODE"/, '整份壳用 exec，git 才会等升级跑完');
+  assert.equal(installGitHook(repo).action, 'already');
+  assert.equal(fs.readFileSync(file, 'utf8'), body, '重复安装不改一个字');
+
+  assert.equal(removeGitHook(repo).action, 'removed');
+  assert.ok(!fs.existsSync(file), '整份自己创建的壳要删掉，不留半截 shebang');
+
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '#!/bin/sh\necho other-agent\n');
+  assert.equal(installGitHook(repo).action, 'appended');
+  const merged = fs.readFileSync(file, 'utf8');
+  assert.match(merged, /echo other-agent/, '别人原有的 hook 原样保留');
+  assert.ok(!merged.includes('exec "$CL_NODE"'), '追加模式不能 exec，会截断别人的逻辑');
+  assert.equal(hookState(repo).mode, 'appended');
+  assert.equal(removeGitHook(repo).action, 'trimmed');
+  const rest = fs.readFileSync(file, 'utf8');
+  assert.match(rest, /echo other-agent/);
+  assert.ok(!rest.includes('convledger-git-post-merge'), '自己的标记与调用行都摘干净');
+  assert.equal(removeGitHook(repo).action, 'foreign-untouched');
+
+  const src = fs.readFileSync(new URL('../hooks/git-post-merge.mjs', import.meta.url), 'utf8');
+  assert.match(src, /\[CLI, 'upgrade'\]/, '拉完要真跑 upgrade，不是只写标记');
+  assert.match(src, /stdio: 'inherit'/, '同步执行，避免 detached 子进程被命令会话清理');
+  fs.rmSync(repo, { recursive: true, force: true });
+});
+
+test('拉完代码自动升级：on/off 带上 git 层', () => {
+  const conn = fs.readFileSync(new URL('../src/connection.mjs', import.meta.url), 'utf8');
+  assert.match(conn, /git-post-merge\.mjs', \['--install'\]/, '接入工具时装上 pull 后触发器');
+  assert.match(conn, /git-post-merge\.mjs', \['--remove'\]/, '断开时一并摘掉，语义对称');
+});
+
+test('upgrade：/health 探不到时仍按 hub.json 的 pid 停旧进程，不把旧 hub 报成新起的', () => {
+  const tool = fixture('upgrade-hubpid');
+  fs.mkdirSync(path.join(tool, 'out'), { recursive: true });
+  const file = path.join(tool, 'out', 'hub.json');
+  fs.writeFileSync(file, JSON.stringify({ pid: process.pid, port: 8765, startedAt: new Date(0).toISOString() }));
+  assert.equal(recordedHubPid(tool), process.pid, '还活着的记录 pid 要认出来');
+  assert.equal(recordedHubPid(tool, 59999), null, '别的端口不许拿 8765 的 pid 来凑');
+  fs.writeFileSync(file, JSON.stringify({ pid: 99999999, port: 8765, startedAt: new Date(0).toISOString() }));
+  assert.equal(recordedHubPid(tool), null, '早就没了的 pid 不能拿去 kill');
+  const src = fs.readFileSync(new URL('../src/upgrade.mjs', import.meta.url), 'utf8');
+  assert.match(src, /recordedHubPid\(tool, port\)/, '重启前把同端口记录的 pid 一起收进停机名单');
+  assert.match(src, /端口上仍是旧 hub/, '探测到旧 pid 不许报成「起新 hub」');
+  fs.rmSync(tool, { recursive: true, force: true });
+});
+
+test('upgrade：有动作时结论说「本次已同步」，没动作才说「已是最新」', () => {
+  const base = { head: 'abc1234', stamp: Date.now(), items: [] };
+  assert.match(upgradeLines({ ...base, actions: ['同步五家 Skill 副本'], ok: true }), /本次已同步到位/);
+  assert.match(upgradeLines({ ...base, actions: ['起 hub 超时'], ok: false }), /同步后仍有不同步项/);
+  assert.match(upgradeLines({ ...base, actions: [], ok: true }), /已是最新/);
+  assert.match(upgradeLines({ ...base, actions: [], ok: false }), /仍有不同步项/);
+});
+
+test('hook 的会话根与 ADAPTERS 同源：Claude Code 不再判 no-source，Stop 能补建账本', () => {
+  // 真机 2026-11-13：claude -p 的 SessionStart 注了「借来的账本」、Stop 报 no-source。
+  // 根因是 hook 自己只列了 Qoder/WorkBuddy 两个根，而 CLI 的 ADAPTERS 早就认 ~/.claude/projects。
+  const roots = sourceRoots();
+  for (const tail of ['/.claude/projects', '/.qoder/projects', '/.workbuddy/projects']) {
+    assert.ok(roots.some((r) => r.endsWith(tail)), `sourceRoots 少了 ${tail}`);
+  }
+  assert.deepEqual(roots,
+    [...new Set(ADAPTERS.flatMap((a) => a.roots))].map((r) => r.replace(/\\/g, '/')),
+    'sourceRoots 必须与 ADAPTERS 完全一致（投影根可被环境变量改写，不许写死路径形状）');
+  const hookSrc = fs.readFileSync(new URL('../hooks/ledger-brief.mjs', import.meta.url), 'utf8');
+  assert.match(hookSrc, /function scanRoots\(\)[\s\S]{0,300}sourceRoots\(\)/, 'hook 必须复用 ADAPTERS 的清单，不许再手写一份');
+  assert.match(hookSrc, /late-build/, '开场源太短没建账时，收尾要补建一次');
+
+  const base = fixture('claude-hook');
+  const SID = 'claude-hook-sid-0001';
+  const src = `${base}/claude/projects/D--fixture-claude/${SID}.jsonl`;
+  fs.mkdirSync(path.dirname(src), { recursive: true });
+  const rec = (n, role, text) => JSON.stringify({
+    type: role, ...(role === 'user' ? { userType: 'external', entrypoint: 'cli' } : {}),
+    sessionId: SID, uuid: `u${n}`,
+    timestamp: new Date(1760000000000 + n * 45000).toISOString(), cwd: 'D:/fixture/claude',
+    message: { role, content: [{ type: 'text', text }] },
+  });
+  fs.writeFileSync(src, [rec(1, 'user', '请给这一段会话建一份账本并说明当前进度'),
+    rec(2, 'assistant', '已经建好账本，当前进度写进第一段。')].join('\n') + '\n');
+  const env = { ...process.env, CLAUDE_CONFIG_DIR: `${base}/claude`,
+    QODER_CONFIG_DIR: `${base}/noq`, WORKBUDDY_CONFIG_DIR: `${base}/nowb`,
+    CONVLEDGER_HOOK_STORE: `${base}/store`, CONVLEDGER_HOOK_LOG: `${base}/log.jsonl`,
+    CONVLEDGER_NO_RESIDENT_HUB: '1' };
+  const stop = spawnSync(process.execPath, ['hooks/ledger-brief.mjs'], {
+    cwd: tools, encoding: 'utf8', maxBuffer: BIG_BUF, env,
+    input: JSON.stringify({ hook_event_name: 'Stop', session_id: SID, cwd: 'D:/fixture/claude',
+      transcript_path: src, stop_hook_active: false }),
+  });
+  assert.equal(stop.status, 0, `hook 退出 ${stop.status}：${stop.stderr}`);
+  const log = fs.readFileSync(`${base}/log.jsonl`, 'utf8');
+  assert.doesNotMatch(log, /no-source/, 'Claude Code 的 transcript_path 又被判成根目录外');
+  assert.match(log, /late-build/, '收尾时没把开场没建成的账本补起来');
+  assert.ok(fs.existsSync(`${base}/store/${SID}/ledger.json`), '补建后账本没落盘');
+  const led = JSON.parse(fs.readFileSync(`${base}/store/${SID}/ledger.json`, 'utf8'));
+  assert.equal(led.runner, 'claude-code', `runner 认错了：${led.runner}`);
+});
+
+test('OpenCode 插件跨实例派活去重：同一 10 分钟窗口只放行一次', () => {
+  // 后台 service 与每个 TUI/CLI 各加载一份插件，进程内 Map 挡不住同一事件被派两次
+  // （真机留痕成对出现）。插件被复制到用户目录、必须自包含，所以不能抽成公共模块，
+  // 这里把函数体取出来单独跑，钉住「落盘分桶 + wx 原子建文件」这个跨进程契约。
+  const src = fs.readFileSync(new URL('../hooks/opencode-plugin.js', import.meta.url), 'utf8');
+  assert.match(src, /claimDispatch/, '要有跨实例闸门');
+  assert.doesNotMatch(src, /lastDispatch/, '不许退回只在进程内生效的 Map 节流');
+  assert.match(src, /action: 'throttled'/, '被挡下要留痕，别静默吞掉');
+  const body = /function claimDispatch\(sid\)\s*\{[\s\S]*?\n\}/.exec(src)?.[0];
+  assert.ok(body, '取不到 claimDispatch 的函数体');
+  const dir = fixture('opencode-claim');
+  const claim = new Function('fs', 'CLAIM_DIR', 'DISPATCH_GAP_MS', `${body}; return claimDispatch;`)(fs, dir, 600000);
+  assert.equal(claim('ses_A'), true, '第一个实例应放行');
+  assert.equal(claim('ses_A'), false, '同窗口第二次必须挡下（真机成对派活的根源）');
+  assert.equal(claim('ses_B'), true, '别的会话不受影响');
+});
+
+test('Claude Code 派活能力表：Agent + run_in_background，不给空指令 Task', () => {
+  // 真机 2026-11-13（CLI 2.1.296）：这家派子代理的入口叫 Agent，Task 是
+  // TaskCreate/TaskGet/TaskUpdate/TaskList/TaskStop 一组任务表工具。写错名字，模型收到的
+  // 就是一条做不到的指令（当轮实测靠模型自己纠正成 Agent 才派成）。
+  const c = DEFAULT_CAPS['claude-code'];
+  assert.equal(c.channel, 'subagent-async');
+  assert.equal(c.tool, 'Agent', '工具名必须是 Agent，不许写回 Task');
+  assert.match(c.asyncParam, /run_in_background:\s*true/, '必须显式给后台参数');
+  assert.doesNotMatch(c.verified, /未实测/, '状态要如实写真机结论');
+  const txt = dispatchFor('claude-code', DEFAULT_CAPS);
+  assert.match(txt, /用 Agent 工具/);
+  assert.match(txt, /run_in_background: true/);
+  assert.doesNotMatch(txt, /用 Task 工具/, 'Task 在这个版本是任务表工具，不能出现在派活指令里');
+  assert.doesNotMatch(txt, /先确认这个工具支持后台运行/, '参数已确认，别再让模型自己猜');
+  // 本机装了 Claude Code 时，顺手把「代码里的工具名」与宿主 SDK 的形状对上；
+  // 换机器没装就只跑上面的静态契约，不因此多算一个 skip。
+  const candidates = [
+    process.env.CLAUDE_CODE_SDK_TYPES,
+    process.env.APPDATA ? `${process.env.APPDATA}/npm/node_modules/@anthropic-ai/claude-code/sdk-tools.d.ts` : null,
+    `${os.homedir()}/.npm-global/lib/node_modules/@anthropic-ai/claude-code/sdk-tools.d.ts`,
+  ].filter(Boolean).map((p) => String(p).replace(/\\/g, '/'));
+  const sdk = candidates.find((p) => fs.existsSync(p));
+  if (sdk) {
+    const d = fs.readFileSync(sdk, 'utf8');
+    assert.match(d, /export interface AgentInput/, '宿主把工具改名了，回来核能力表');
+    assert.match(d, /run_in_background\?: boolean/, '后台参数没了，就别再让 agent 派异步子代理');
+  }
+});
+
+test('Claude Code 派活文案不串台，权限被拒也不许主线重试', () => {
+  const claude = dispatchFor('claude-code', DEFAULT_CAPS);
+  assert.doesNotMatch(claude, /create_chat_session/, 'Qoder 的会话工具不该串到 Claude Code');
+  assert.doesNotMatch(claude, /占住本轮/, '不能给出同步子代理的口径');
+  assert.match(claude, /别在主线重试/, '后台被权限拦下时欠项留下一轮，别把主线拖住');
+  assert.match(dispatchFor('workbuddy', DEFAULT_CAPS), /用 Agent 工具/, '改 Claude Code 不能顺手改掉 WorkBuddy');
+  assert.match(dispatchFor('opencode', DEFAULT_CAPS), /插件自己派活/, '插件档仍由宿主自己派');
+});
+
+test('派活能力表全表契约：出处与真机证据齐全，证伪入口一律不派', () => {
+  // 2026-11-13 复盘：WorkBuddy 抄 Qoder 的会话工具、Claude Code 凭印象写 Task，两次都是
+  // 「模型根本没有这个按钮」的空指令。写进文档会忘，所以把纪律钉进代码、CLI 与测试。
+  assert.deepEqual(capsWarnings(DEFAULT_CAPS), [], '默认表不许带警告：每个可用档都要有出处与真机结论');
+  for (const [host, c] of Object.entries(DEFAULT_CAPS)) {
+    assert.ok(CHANNELS.includes(c.channel), `${host} 的通道要在五档里`);
+    if (c.channel === 'none' || c.channel === 'plugin') continue;
+    assert.ok(c.evidence, `${host} 缺 evidence：工具名/参数没有出处，下次宿主改名就是空指令`);
+    assert.match(c.verified, /真机/, `${host} 没真机证据不许开可用通道`);
+    assert.ok(c.tool || c.open, `${host} 没写 tool/open，模型只能自己猜`);
+    if (c.channel === 'subagent-async') assert.ok(c.asyncParam, `${host} 异步档要写死后台参数`);
+  }
+  assert.ok(BAD_TOOLS.some((b) => b.host === 'claude-code' && b.tool === 'Task'), 'Task 这个错名要留在证伪表里');
+
+  const bad = { ...DEFAULT_CAPS, 'claude-code': { ...DEFAULT_CAPS['claude-code'], tool: 'Task' } };
+  assert.ok(capsWarnings(bad).some((w) => w.level === 'block' && w.host === 'claude-code'), '证伪入口要报 block');
+  assert.ok(capBlockReason(bad, 'claude-code'), '要能给出拦下原因');
+  const txt = dispatchFor('claude-code', bad);
+  assert.match(txt, /什么都不做/, '命中证伪入口时改为诚实留欠，不再发派活指令');
+  assert.doesNotMatch(txt, /用 Task 工具/, '不许把做不到的指令发给模型');
+  assert.equal(capBlockReason(bad, 'workbuddy'), null, '别家不受牵连');
+
+  const fresh = { 'new-host': { channel: 'subagent-async', tool: 'Agent', verified: '按形状推断' } };
+  const fw = capsWarnings(fresh);
+  assert.ok(fw.some((w) => /evidence/.test(w.text)), '新宿主没出处要警告');
+  assert.ok(fw.some((w) => /真机/.test(w.text)), '新宿主没真机证据要警告');
+  assert.ok(fw.some((w) => /asyncParam/.test(w.text)), '异步档缺后台参数要警告');
+
+  // 覆盖文件里把工具名改错，运行时同样拦下，并在 caps 的结构化输出里看得见。
+  const base = fixture('caps-contract');
+  const root = path.join(base, 'store');
+  fs.mkdirSync(root, { recursive: true });
+  fs.writeFileSync(path.join(base, 'host-caps.json'), JSON.stringify({ hosts: { 'claude-code': { tool: 'Task' } } }));
+  const t = capsTable(root);
+  assert.ok(t.warnings.some((w) => w.level === 'block'), 'capsTable 要带出警告');
+  assert.ok(t.rows.find((r) => r.host === 'claude-code').blocked, '表里要标出被拦下的那一行');
+  assert.ok(t.rows.find((r) => r.host === 'qoder').evidence, '每家都要能在 CLI 查到出处');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('宿主状态单一源：能力表、Skill 与 CHANGELOG 口径一致', () => {
+  const skill = fs.readFileSync(new URL('../skill/convledger/SKILL.md', import.meta.url), 'utf8');
+  const changelog = fs.readFileSync(new URL('../../CHANGELOG.md', import.meta.url), 'utf8');
+
+  // ① 能力表的状态必须合法、与 verified 不矛盾
+  for (const [host, c] of Object.entries(DEFAULT_CAPS)) {
+    assert.ok(STATUS[c.status], `${host} 的 status 要在三档里`);
+    assert.deepEqual(capsWarnings({ [host]: c }), [], `${host} 状态自相矛盾或缺字段`);
+  }
+  assert.equal(DEFAULT_CAPS['claude-code'].status, 'verified', 'Claude Code 已真机跑通，不许回退成未实测');
+  assert.equal(DEFAULT_CAPS.opencode.status, 'verified', 'OpenCode 已真机跑通，不许回退成未实测');
+  assert.equal(DEFAULT_CAPS.codex.status, 'untested', 'Codex 没真机证据，不许写成已验证');
+
+  // ② 活跃文档不许再出现旧结论；CHANGELOG 历史段豁免，但必须有读法声明
+  const active = ['../../README.md', '../skill/convledger/SKILL.md'];
+  const stale = /尚未在本机实测投递|后台派发路径待真机跑满一轮|派活链路待真机验证|(Claude Code|OpenCode)[^\n]{0,40}(未实测投递|不能用|尚未接入)/;
+  for (const f of active) assert.doesNotMatch(fs.readFileSync(new URL(f, import.meta.url), 'utf8'), stale, `${f} 还留着过期的宿主状态口径`);
+  assert.match(changelog, /历史条目[\s\S]{0,120}当时的结论/, 'CHANGELOG 头部要声明历史条目不是现状');
+  assert.match(skill, /不是只有 Qoder 和 WorkBuddy 能用/, 'Skill 要明说四家都能用，别让 agent 照旧口径转述');
+
+  // ③ 五家已装副本（本机有就查）关键句与正本一致
+  const marker = '不是只有 Qoder 和 WorkBuddy 能用';
+  const copies = [
+    path.join(os.homedir(), '.qoder', 'skills', 'convledger', 'SKILL.md'),
+    path.join(os.homedir(), '.claude', 'skills', 'convledger', 'SKILL.md'),
+    path.join(os.homedir(), '.workbuddy', 'skills', 'convledger', 'SKILL.md'),
+    path.join(os.homedir(), '.config', 'opencode', 'skills', 'convledger', 'SKILL.md'),
+    path.join(os.homedir(), '.codex', 'skills', 'convledger', 'SKILL.md'),
+  ];
+  for (const p of copies) if (fs.existsSync(p)) assert.ok(fs.readFileSync(p, 'utf8').includes(marker), `${p} 副本没同步新状态口径`);
+
+  // ④ CLI 的权威表带 status / gaps，且与能力表一致
+  const base = fixture('caps-status');
+  const root = path.join(base, 'store');
+  fs.mkdirSync(root, { recursive: true });
+  const t = capsTable(root);
+  assert.match(t.statusSummary, /已验证：.*claude-code.*opencode/, '状态摘要要列出已验证的四家');
+  for (const r of t.rows) {
+    assert.equal(r.status, DEFAULT_CAPS[r.host].status, `${r.host} 的 caps 输出与能力表不一致`);
+    assert.equal(r.statusLabel, STATUS[r.status]);
+    assert.deepEqual(r.gaps, DEFAULT_CAPS[r.host].gaps);
+  }
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('常驻 hub 暂停标记：App 全局暂停按钮 / hub 端点 / 宿主事件与自动升级共用同一开关', async () => {
+  const { hubPaused, pauseFile } = await import('../src/upgrade.mjs');
+  const base = fixture('hub-paused');
+  const tool = path.join(base, 'tool');
+  fs.mkdirSync(path.join(tool, 'out'), { recursive: true });
+  assert.equal(hubPaused(tool), false, '没有标记时不暂停');
+  fs.writeFileSync(pauseFile(tool), 'pause\n');
+  assert.equal(hubPaused(tool), true, '标记存在时暂停');
+  const hook = fs.readFileSync(new URL('../hooks/ledger-brief.mjs', import.meta.url), 'utf8');
+  const up = fs.readFileSync(new URL('../src/upgrade.mjs', import.meta.url), 'utf8');
+  assert.match(up, /if \(hubPaused\(tool\)\)/, '自动升级起服务要判暂停标记');
+  // App 里的「全局暂停」：hub 端点 + 顶栏按钮；ensureHubAuto 认标记；明确启动时清标记恢复
+  const mapSrc = fs.readFileSync(new URL('../src/map.mjs', import.meta.url), 'utf8');
+  assert.match(mapSrc, /url === '\/hub\/pause'/, 'hub 要有全局暂停端点');
+  assert.match(mapSrc, /'HUB-PAUSED'/, '全局暂停要落标记文件');
+  assert.match(fs.readFileSync(new URL('../web/app.html', import.meta.url), 'utf8'), /id="pause"/, 'App 顶栏要有全局暂停按钮');
+  assert.match(fs.readFileSync(new URL('../web/app.js', import.meta.url), 'utf8'), /\/hub\/pause/, '按钮要调暂停端点');
+  assert.match(fs.readFileSync(new URL('../src/setup.mjs', import.meta.url), 'utf8'), /'HUB-PAUSED'/, 'ensureHubAuto 要认暂停标记、不自动起');
+  assert.match(fs.readFileSync(new URL('../src/cli.mjs', import.meta.url), 'utf8'), /function resumeHub\(/, '双击图标/map 要清标记恢复');
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('加载纪律：默认档位与 CLI 一致', () => {
+  const prefs = fs.readFileSync(new URL('../src/prefs.mjs', import.meta.url), 'utf8');
+  const cli = fs.readFileSync(new URL('../src/cli.mjs', import.meta.url), 'utf8');
+  assert.match(prefs, /autoBuild:\s*'off'/, 'prefs 默认档位必须是 off');
+  assert.match(cli, /buildN = flags\.all \? Infinity : 0/, 'CLI 默认只建当前这一段');
+});
+
+test('长历史按片建账：首次只建尾部一片、每轮补一片、存量全量账本零回归', () => {
+  const base = fixture('window-slice');
+  const SID = 'window-slice-0001';
+  const src = `${base}/${SID}.jsonl`;
+  const L = [JSON.stringify({ type: 'workspace-directories', directories: ['D:/fixture/window'], timestamp: new Date(1760000000000).toISOString() })];
+  for (let i = 0; i < 600; i++) {
+    const role = i % 2 ? 'assistant' : 'user';
+    L.push(JSON.stringify({
+      type: role, sessionId: SID, uuid: `u${i}`, timestamp: new Date(1760000000000 + i * 1000).toISOString(),
+      cwd: 'D:/fixture/window', ...(role === 'user' ? { humanInput: '请把这一段会话的进度整理成账本' } : {}),
+      message: { role, content: [{ type: 'text', text: '整理当前进度并说明下一步' + 'x'.repeat(1600) }] },
+    }));
+  }
+  fs.writeFileSync(src, L.join('\n') + '\n', 'utf8');
+  const size = fs.statSync(src).size;
+  assert.ok(size > SLICE_BYTES * 2, '夹具要比两片还长，才验得出「只建一片」');
+
+  const root = `${base}/store`;
+  fs.mkdirSync(root, { recursive: true });
+  const ledFile = `${root}/${SID}/ledger.json`;
+  const first = indexWindowed(src, { storeRoot: root });
+  assert.equal(first.action, 'first', '刚接入的长历史要先只建尾部一片');
+  assert.ok(first.parsedBytes <= SLICE_BYTES + 4096, `单次解析不许超过一片：${first.parsedBytes}`);
+  assert.ok(first.segs > 0, '当前上下文这一段要真的建出段');
+  let led = JSON.parse(fs.readFileSync(ledFile, 'utf8'));
+  assert.equal(led.window.mode, 'slice');
+  assert.equal(led.sourceBytes, size, '源规模要报全文件，别显示成 256KB');
+  assert.equal(led.sourceRecords, led.window.lastSlice.endLine);
+  const ids1 = led.segments.map((s) => s.id);
+  assert.ok(ids1.every((id) => /^S\d{6,}$/.test(id)), '段 id 要用全文件绝对行号，逐片追加才不改名');
+  assert.ok(ids1.every((id, i) => i === 0 || +id.slice(1) > +ids1[i - 1].slice(1)), '段按时间正序');
+
+  // 更早的记录只提供只读文本，不生成段/卡/索引。
+  const raw = rawRecords(src, led);
+  assert.ok(raw.lines.length > 0, '未建账部分要能按行只读展示');
+  assert.equal(raw.complete, false);
+  assert.equal(raw.totalBytes, size);
+
+  const grow = indexWindowed(src, { storeRoot: root, grow: true });
+  assert.equal(grow.action, 'grow');
+  assert.ok(grow.parsedBytes <= SLICE_BYTES + 4096, '补一片也不能放大单次解析量');
+  led = JSON.parse(fs.readFileSync(ledFile, 'utf8'));
+  assert.ok(led.segments.length >= ids1.length, '补片后总段数不能变少');
+  for (const id of ids1) assert.ok(led.segments.some((s) => s.id === id), `补片后旧段 ${id} 不能改名或丢掉`);
+  assert.ok(led.window.coveredFromByte < first.window.coveredFromByte, '游标要往更早的记录走');
+
+  const tail = indexWindowed(src, { storeRoot: root });
+  assert.equal(tail.action, 'tail', '源又长了就重算尾部当前片');
+  assert.ok(tail.parsedBytes <= SLICE_BYTES + 4096);
+  assert.doesNotThrow(() => readView(`${root}/${SID}`), '逐片合并出的账本要能正常读视图');
+
+  // 存量账本（没有 window 字段）一律维持原来的全量重建，零回归。
+  const oldRoot = `${base}/store-full`;
+  fs.mkdirSync(oldRoot, { recursive: true });
+  writeStore(oldRoot, build(src, { storeRoot: oldRoot }));
+  const again = indexWindowed(src, { storeRoot: oldRoot, grow: true });
+  assert.equal(again.action, 'full', '已经全量建过的账本不许被悄悄改成按片模式');
+
+  fs.rmSync(base, { recursive: true, force: true });
+});
+
+test('主线程零全库重活：worker 缓存 + 冷开空壳，/health 不碰磁盘', () => {
+  const mapSrc = fs.readFileSync(new URL('../src/map.mjs', import.meta.url), 'utf8');
+  const refreshSrc = fs.readFileSync(new URL('../src/refresh.mjs', import.meta.url), 'utf8');
+  assert.match(mapSrc, /url === '\/health' && method === 'GET'/, '/health 要排在所有轮询与派活之前');
+  assert.match(mapSrc, /refresh\.getProjects\(/, '项目清单走 worker 缓存');
+  assert.match(mapSrc, /refresh\.getProjectDetail\(/, '项目页四条全库重活走 worker 缓存');
+  assert.match(refreshSrc, /COLD_WAIT_MS/, '冷开只给后台一小段宽限，不许同步算完');
+  assert.doesNotMatch(refreshSrc, /usageReport\(|statusSnapshot\(|libraryOf\(/, '刷新管理器不许留内联兜底');
+  const hookSrc = fs.readFileSync(new URL('../hooks/ledger-brief.mjs', import.meta.url), 'utf8');
+  assert.match(hookSrc, /led\?\.window\?\.mode === 'slice'/, 'Stop 每轮补片只对按片建的账本生效');
+  assert.match(hookSrc, /catchup-slice/, '补片要留痕');
+});
+
+test('宿主残留实例：只清无窗口且超龄的，有窗口绝不碰', () => {
+  // 一套有窗口的新实例 + 一套崩溃后留下的无窗口旧实例（2026-11-13 真实发生过：渲染进程 OOM
+  // 被杀，主进程卡在收尾退不掉，留下 2.5G 没有窗口的进程树）
+  const procs = [
+    { pid: 1, ppid: 999, type: 'main', start: 1000, mem: 500 },
+    { pid: 2, ppid: 1, type: 'renderer', start: 1001, mem: 700 },
+    { pid: 10, ppid: 999, type: 'main', start: 100, mem: 1000 },
+    { pid: 11, ppid: 10, type: 'gpu', start: 101, mem: 280 },
+  ];
+  const trees = buildTrees(procs);
+  assert.equal(trees.length, 2, '两套实例要拆成两棵树');
+  assert.equal(pickKeep(trees).root.pid, 1, '保留有 renderer 的那套');
+  assert.deepEqual(pickStray(trees, { now: 5000 }).map((t) => t.root.pid), [10], '无窗口且超龄的才清');
+  assert.deepEqual(pickStray(trees, { now: 150 }).map((t) => t.root.pid), [], '刚启动的给 90 秒宽限期');
+  // 有窗口的树再老也不许清
+  const withWindow = buildTrees([
+    { pid: 1, ppid: 999, type: 'main', start: 10, mem: 100 },
+    { pid: 2, ppid: 1, type: 'renderer', start: 11, mem: 100 },
+    { pid: 10, ppid: 999, type: 'main', start: 20, mem: 100 },
+  ]);
+  assert.deepEqual(pickStray(withWindow, { now: 100000 }).map((t) => t.root.pid), [10], '有 renderer 的那棵再老也不清，无窗口的照清');
+});
+
+test('综述落盘不再每次都重建：历史块走快路径，锚点过期才重建', () => {
+  const src = fs.readFileSync(new URL('../src/cli.mjs', import.meta.url), 'utf8');
+  assert.match(src, /let applied = attempt\(\);/, '先拿现有账本乐观校验（读账本 15ms，重建 1562ms）');
+  assert.match(src, /if \(applied\.errors\.length\)/, '只有校验落败才走重建重试');
+  // 只看 summarise 这一段：别的命令（phases/memory）也各有一次重建，不能算进来。
+  const from = src.indexOf("if (cmd === 'summarise')");
+  const to = src.indexOf('// 阶段表', from);
+  const seg = src.slice(from, to > from ? to : from + 6000);
+  assert.equal((seg.match(/writeStore\(root, build\(/g) || []).length, 1,
+    '重建只能出现在重试分支里；无条件重建会让每次落盘白花 1.5 秒');
+  assert.ok(seg.indexOf('writeStore(root, build(') > seg.indexOf('if (applied.errors.length)'),
+    '重建必须在「校验落败」之后，不能又挪回开头');
+});
+
+test('LLM 后端：只给一个 key 就能接——脱敏、挑模型、认路径、key 不进库', () => {
+  // key 出现在任何回执里都必须是脱敏的
+  assert.equal(maskKey('test-abcdefghijklmnop'), 'tes…mnop');
+  assert.equal(maskKey('short'), 'sh…');
+  assert.equal(maskKey(''), '（未设置）');
+  // 补账不需要旗舰：优先便宜快的
+  assert.equal(pickModel(['pro-max', 'flash-lite', 'mini-1']), 'flash-lite');
+  assert.equal(pickModel(['gpt-4o', 'mini']), 'mini');
+  assert.equal(pickModel(['only-one']), 'only-one');
+  assert.equal(pickModel([]), null);
+  // OW Bridge 的 api-key 落点按平台走
+  assert.match(bridgeDataDir({ platform: 'win32', env: { APPDATA: 'C:/A' }, home: 'C:/H' }), /Buddy Bridge$/);
+  assert.match(bridgeDataDir({ platform: 'darwin', env: {}, home: '/Users/x' }), /Library[\\/]Application Support[\\/]Buddy Bridge$/);
+  assert.match(bridgeDataDir({ platform: 'linux', env: {}, home: '/home/x' }), /\.config[\\/]Buddy Bridge$/);
+  // 配置读写：写进去、读回来、能清掉；文件落在 store 下
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-'));
+  try {
+    writeLlm(tmp, { baseURL: 'http://127.0.0.1:1/v1', apiKey: 'test-abcdefghijklmnop', model: 'm', provider: 'custom', models: ['m', 'm2'] });
+    const back = readLlm(tmp);
+    assert.equal(back.configured, true, 'baseURL + apiKey 都在才算接上');
+    assert.equal(back.model, 'm');
+    assert.deepEqual(back.models, ['m', 'm2']);
+    assert.ok(fs.existsSync(path.join(tmp, 'llm.json')), '配置要落成 llm.json');
+    clearLlm(tmp);
+    assert.equal(readLlm(tmp).configured, false, '--clear 之后要回到「没接」');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  // key 不进库：配置落在 tool/out 下，那里必须被 gitignore
+  const gi = fs.readFileSync(new URL('../../.gitignore', import.meta.url), 'utf8');
+  assert.match(gi, /tool\/out\//, 'tool/out 必须被忽略，llm.json 里的 key 才不会进版本库');
+  // 命令面：三条接入路径都得在 usage 里，否则用户找不到
+  const cliSrc = fs.readFileSync(new URL('../src/cli.mjs', import.meta.url), 'utf8');
+  assert.match(cliSrc, /convledger llm \[--key/, 'usage 要登记 llm');
+  assert.match(cliSrc, /--bridge/, '要能直接读本机 OW Bridge 的 key');
+  assert.match(cliSrc, /--base-url/, '要能接任意 OpenAI 兼容网关');
+  assert.match(cliSrc, /detectBridge\(\)/, 'OW Bridge 要自动发现，不能让人手抄端点');
+  // 网络错误要翻成人话，别把 "fetch failed" 甩给用户
+  const refused = new TypeError('fetch failed');
+  refused.cause = Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:1'), { code: 'ECONNREFUSED' });
+  assert.match(describeNetError(refused, 5000), /端口没人听/);
+  const aborted = Object.assign(new Error('aborted'), { name: 'AbortError' });
+  assert.match(describeNetError(aborted, 3000), /超时（3000ms）/);
+  const dns = new TypeError('fetch failed');
+  dns.cause = Object.assign(new Error('getaddrinfo ENOTFOUND nope'), { code: 'ENOTFOUND' });
+  assert.match(describeNetError(dns, 5000), /域名解析不了/);
+});
+
+test('钥匙串：贴过的 key 记本机、认得出归属、一键换回、明文不再外露', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'llm-ring-'));
+  try {
+    // 存两条：一条 OmniRoute（本机转接）、一条 DeepSeek；列表记住归属
+    saveKeyEntry(tmp, { apiKey: 'test-omni000111222333444', baseURL: 'http://127.0.0.1:20128/v1', provider: 'omni-route', label: 'OmniRoute（本机转接）', model: 'dva/glm-5-3-flash-max', models: ['dva/glm-5-3-flash-max', 'auto/fast'] });
+    saveKeyEntry(tmp, { apiKey: 'test-deep999888777666555', baseURL: 'https://api.deepseek.com/v1', provider: 'deepseek', label: 'DeepSeek', model: 'deepseek-chat', models: ['deepseek-chat'] });
+    const ring = listSavedKeys(tmp);
+    assert.equal(ring.length, 2, '两条都记下了');
+    assert.ok(ring.every((k) => k.id && k.keyMasked && k.baseURL && k.label), '每条要带 id / 脱敏 key / 端点 / 归属');
+    assert.ok(!JSON.stringify(ring).includes('test-omni000111222333444'), '列表绝不外露明文 key');
+    assert.ok(!JSON.stringify(ring).includes('test-deep999888777666555'), '列表绝不外露明文 key');
+    assert.ok(!('apiKey' in ring[0]), '回给页面的条目里连 apiKey 字段都不能有');
+    // 重复贴同一条去重，只更新归属信息
+    saveKeyEntry(tmp, { apiKey: 'test-omni000111222333444', baseURL: 'http://127.0.0.1:20128/v1', provider: 'omni-route', label: 'OmniRoute（本机转接）', model: 'auto/fast', models: ['auto/fast'] });
+    assert.equal(listSavedKeys(tmp).length, 2, '同一条 key 重贴去重');
+    assert.equal(listSavedKeys(tmp).find((k) => k.provider === 'omni-route').model, 'auto/fast', '重贴会更新模型选择');
+    // 切换：切到 OmniRoute 那条，当前配置跟着走，lastUsedAt 记下
+    const omniId = listSavedKeys(tmp).find((k) => k.provider === 'omni-route').id;
+    const cur = useSavedKey(tmp, omniId);
+    assert.equal(cur.baseURL, 'http://127.0.0.1:20128/v1');
+    assert.equal(cur.provider, 'omni-route');
+    assert.equal(cur.model, 'auto/fast');
+    assert.deepEqual(cur.models, ['auto/fast'], '切换要带上记下的模型列表，不用重探');
+    assert.equal(listSavedKeys(tmp).find((k) => k.id === omniId).inUse, true, '列表要标出使用中');
+    // writeLlm 不丢钥匙串
+    writeLlm(tmp, { baseURL: 'https://api.openai.com/v1', apiKey: 'test-open123123123123123', model: 'gpt-4o-mini', provider: 'openai', models: ['gpt-4o-mini'] });
+    assert.equal(listSavedKeys(tmp).length, 2, '换端重接不丢贴过的 key');
+    // 老配置自动收进串
+    ensureActiveSaved(tmp);
+    assert.equal(listSavedKeys(tmp).length, 3, '已接但没入串的 key 会被 ensureActiveSaved 收进来');
+    assert.equal(listSavedKeys(tmp).find((k) => k.provider === 'openai').inUse, true, '新收的这条就是使用中');
+    // 正在使用的不许删
+    const openId = listSavedKeys(tmp).find((k) => k.provider === 'openai').id;
+    assert.throws(() => removeSavedKey(tmp, openId), /正在使用/, '使用中的条目删除要被拒');
+    // 断开：当前连接清掉，钥匙串原样留着
+    clearLlm(tmp);
+    const after = readLlm(tmp);
+    assert.equal(after.configured, false, '断开之后回到「没接」');
+    assert.equal(listSavedKeys(tmp).length, 3, '断开不丢钥匙串');
+    // 删一条真的少一条
+    assert.equal(removeSavedKey(tmp, omniId), true, '删掉不用的那条');
+    assert.equal(listSavedKeys(tmp).length, 2, '删完少一条');
+    // 切换到不存在的 id 要报人话
+    assert.throws(() => useSavedKey(tmp, 'k-nonexistent'), /钥匙串里没有/, '切换不存在的 id 要报人话');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+  // 接线：路由、页面、CLI 都得在
+  const map = fs.readFileSync(new URL('../src/map.mjs', import.meta.url), 'utf8');
+  assert.match(map, /url === '\/llm\/keys'/, '页面要能切换/删除已存 key');
+  assert.match(map, /savedKeys: listSavedKeys\(root\)/, '配置视图要带钥匙串（listSavedKeys 自带脱敏）');
+  assert.match(map, /ensureActiveSaved\(root\)/, '视图读取时把没入串的活跃 key 收进来');
+  assert.match(map, /saveKeyEntry\(root, \{ apiKey: picked\.apiKey/, '页面接上的 key 要顺手入串');
+  const html = fs.readFileSync(new URL('../web/app.html', import.meta.url), 'utf8');
+  assert.match(html, /id="llmkeys"/, '设置页要有钥匙串列表');
+  const js = fs.readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+  assert.match(js, /renderLlmKeys\(/, '设置页要渲染钥匙串');
+  assert.match(js, /\/llm\/keys/, '切换/删除要打到 /llm/keys');
+  const cli = fs.readFileSync(new URL('../src/cli.mjs', import.meta.url), 'utf8');
+  assert.match(cli, /flags\.keys \|\| flags\.use \|\| flags\.forget/, 'CLI 要有 --keys/--use/--forget');
+  assert.match(cli, /saveKeyEntry\(root, \{ apiKey: cfg\.apiKey/, 'CLI 接上的 key 也要入串');
+});
+
+test('设置页能直接填 key：三个后端端点 + 界面入口 + key 只回脱敏值', () => {
+  const map = fs.readFileSync(new URL('../src/map.mjs', import.meta.url), 'utf8');
+  assert.match(map, /url === '\/llm\.json'/, '页面要能读当前模型配置');
+  assert.match(map, /url === '\/llm\/test'/, '页面要能试连通');
+  assert.match(map, /keyMasked: c\.apiKey \? maskKey\(c\.apiKey\)/, '回给页面的 key 必须脱敏');
+  assert.doesNotMatch(map, /json\(200, *\{+ *apiKey/, '绝不把原始 key 发给页面');
+  // 写配置必须过同源闸，别让别的页面能把 key 换掉
+  const saveBlock = map.slice(map.indexOf("url === '/llm'"), map.indexOf("url === '/llm/test'"));
+  assert.match(saveBlock, /ORIGIN_OK\(req\.headers\.origin, port0\)/, '保存配置要校验同源');
+  const html = fs.readFileSync(new URL('../web/app.html', import.meta.url), 'utf8');
+  assert.match(html, /data-view="settings"/, '左栏要有设置入口');
+  assert.match(html, /id="llmkey"[^>]*type="password"/, 'key 输入框必须是 password 类型');
+  assert.match(html, /id="llmtest"/, '要有「测试连通」按钮');
+  assert.match(html, /id="llmbridge"/, '要能一键读本机 OW Bridge');
+  const js = fs.readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+  assert.match(js, /function loadLlm\(/, '设置页要加载当前配置');
+  assert.match(js, /settings: '模型配置'/, 'VIEW_TITLE 要登记 settings（页面叫「模型配置」），否则路由回退到看板');
+  assert.match(js, /if \(v === 'settings'\) \{ loadLlm\(\); \}/, '切到模型配置页要拉一次配置');
+  assert.doesNotMatch(js, /innerHTML/, 'app.js 不许用 innerHTML（防 XSS）');
+  // 模型配置页结构：已存的 Key 是独立板块（仿切换器），接入表单是另一块，不混在一个表单里
+  assert.match(html, /已存的 Key/, '钥匙串要独立成板块，页面上能直接看到存了哪些 key');
+  assert.match(html, /id="llmkeystate"/, '钥匙串板块要有状态行（几条 · 当前用哪条）');
+  assert.match(html, /接入新的 Key/, '接入表单是独立板块');
+  const keysPanel = html.slice(html.indexOf('id="llmkeys"'), html.indexOf('接入新的 Key'));
+  assert.doesNotMatch(keysPanel, /id="llmkey"/, 'key 列表板块里不许混进接入表单');
+  // 视图布局规则必须用 :not([hidden]) 限定：裸 #view-settings { display: grid } 的 ID 优先级
+  // 会压过 .view[hidden] 的 display:none，模型配置内容因此在每个页面底部都渲染一遍（2026-11-14 事故）
+  const css = fs.readFileSync(new URL('../web/app.css', import.meta.url), 'utf8');
+  assert.match(css, /#view-settings:not\(\[hidden\]\)/, '设置板块布局要限定在未隐藏态');
+  assert.doesNotMatch(css, /#view-\w+\s*\{[^}]*display:(?!none)[^}]*\}(?![^#]*:not\(\[hidden\]\))/, '别的视图也不许再有裸 display 规则顶掉 hidden');
+  // 「已存的 Key」不能永远停在「正在读取」：loadLlm 不许因单个元素缺失整段早退（2026-11-14 事故）
+  assert.match(html, /id="llmstate"/, '接入板块要带状态元素');
+  assert.doesNotMatch(js, /if \(!EL\.llmstate\) return;/, 'loadLlm 不许因 llmstate 缺失早退——会把钥匙串状态一起饿死');
+  assert.match(js, /if \(EL\.llmkeystate\) EL\.llmkeystate\.textContent = '读不到配置'/, '拉取失败时钥匙串状态行也要给人话');
+  // 已存 Key 的状态行不能永远停在「正在读取」：进入视图要真的拉一次
+  assert.match(js, /function loadLlm\(\)/, 'loadLlm 要存在并在切到该视图时调用');
+});
+
+test('资产署名：制作人与 GitHub 账号在各入口一致', () => {
+  const root = new URL('../../', import.meta.url);
+  const read = (p) => fs.readFileSync(new URL(p, root), 'utf8');
+  const app = read('tool/web/app.html');
+  assert.match(app, /<meta name="author" content="再来一杯海星酒 \(zhl110\)">/, '网页要有 author meta');
+  assert.match(app, /制作人 再来一杯海星酒/, '应用窗标题要带制作人');
+  assert.match(read('tool/web/app.js'), /DOC_TITLE = 'convledger · 制作人 再来一杯海星酒'/,
+    '窗口标题不跟视图名漂移');
+  assert.match(read('tool/src/cli.mjs'), /制作人：再来一杯海星酒 · GitHub zhl110/, 'CLI 帮助要带署名');
+  const readme = read('README.md');
+  assert.match(readme, /再来一杯海星酒/);
+  assert.match(readme, /github\.com\/zhl110/);
+  const pkg = JSON.parse(read('tool/package.json'));
+  assert.equal(pkg.author?.name, '再来一杯海星酒');
+  assert.equal(pkg.author?.url, 'https://github.com/zhl110');
+  assert.match(read('LICENSE.md'), /再来一杯海星酒\s*[（(]\s*zhl110/, '许可文件的版权人要写清网名与账号');
+  for (const p of ['tool/web/hub.html', 'tool/web/atlas.html', 'tool/web/architecture.html']) {
+    assert.match(read(p), /<meta name="author"/, `${p} 缺 author meta`);
+  }
+});
+
+test('桌面壳：工作台空状态会重拉，托盘隐藏启动不闪黑框', () => {
+  const js = fs.readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
+  assert.match(js, /function mountWork/, '工作台挂载要抽成一个可重复调用的函数');
+  assert.match(js, /30000/, '项目表要有缓存时限，不能永远停在首次的空列表');
+  assert.match(js, /currentView === 'work'\) mountWork\(false\)/, '轮询时工作台要重拉项目表');
+  const setup = fs.readFileSync(new URL('../src/setup.mjs', import.meta.url), 'utf8');
+  assert.match(setup, /tray-launch\.vbs/, '托盘要走隐藏启动器');
+  assert.match(setup, /wscript\.exe/, 'wscript 没有控制台，不会闪黑框');
+  const vbs = fs.readFileSync(new URL('../tray-launch.vbs', import.meta.url), 'utf8');
+  assert.match(vbs, /sh\.Run cmd, 0, False/, 'Run 的窗口样式 0＝隐藏');
+  assert.doesNotMatch(vbs, /[^\x00-\x7F]/, 'VBS 只能 ASCII：中文注释会让 wscript 弹错误框');
+});
+
+test('后台接管：没接模型时明确拒绝，不假装补过', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'takeover-'));
+  try {
+    await assert.rejects(() => runAuto(tmp, { sessionId: 'nope' }), /还没接模型/,
+      '没接 key 就不该起循环，更不许静默当作补完');
+  } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
+});
+
+test('补账优先级：接了模型走后台循环，没接才轮到 Agent，总闸关则全停', () => {
+  // hook 侧：总闸三态——关＝谁都不补；开+接 key＝后台模型；开+没接＝Agent 老路
+  const hook = fs.readFileSync(new URL('../hooks/ledger-brief.mjs', import.meta.url), 'utf8');
+  assert.match(hook, /lc\.enabled === false\) return \{ skip: 'auto-off' \}/,
+    '总闸关＝LLM 与当前 Agent 都不再补综述（欠项留着不派）');
+  assert.match(hook, /lc\.configured\) return \{ skip: 'llm-backend' \}/,
+    '总闸开且接了 key＝后台模型补，当前 Agent 退出');
+  assert.match(hook, /closeout/, '压缩边界要能起后台补账循环');
+  assert.match(hook, /tryLock\(STORE, sid\)/, '起循环前要拿锁防重入');
+  assert.match(hook, /detached: true/, '后台循环要脱离 hook 进程跑，不占任何前台');
+  assert.match(hook, /items\.length && !autoOff/, '总闸关时压缩边界连综述欠项都不列');
+  // 循环本体：每轮看总闸；分批复用既有策略；落盘走既有闸门；子进程显式传 store
+  const auto = fs.readFileSync(new URL('../src/closeout-auto.mjs', import.meta.url), 'utf8');
+  assert.match(auto, /if \(!llmOn\(root\)\)/, '循环每轮开头看总闸，关了立刻收手');
+  assert.match(auto, /pickSummaryBatch\(/, '循环要复用分批策略（尾 4 块 → 往前 1 块）');
+  assert.match(auto, /'summarise', '--put'/, '落盘必须走 summarise --put 的全量闸门，便宜模型也不许绕');
+  assert.match(auto, /'--store', root/, '子进程要显式传 --store，别写进默认账本');
+  assert.match(auto, /LOCK_MS = 10 \* 60 \* 1000/, '锁要有过期时间，进程崩了不永久卡死');
+  assert.match(auto, /r\.error \?\? r\.stderr/, 'spawn 失败要把 error 带出来，别只留三个字');
+  assert.match(auto, /closeout-result-/, '跑完要写结果文件，人能查到成没成');
+  // 2026-11-14 全面接管：收尾/阶段/记忆/画像也认 key，不再派 Agent
+  assert.match(hook, /lc\.configured && lc\.enabled !== false\)[\s\S]{0,200}skip: 'llm-backend'/,
+    '收尾也认已接 key：不再向当前 Agent 派后台会话');
+  assert.match(hook, /function maybeAutoSpawn/, 'Stop 末尾统一看欠项起后台循环');
+  assert.match(hook, /function spawnAuto/, '起循环要拿锁并 detached');
+  assert.match(hook, /llmConfigured/, '画像也按是否接 key 分流');
+  assert.match(hook, /后台模型静默收尾/, '压缩档也要走后台模型');
+  // 循环本体五段：每段落盘都走既有 --put
+  assert.match(auto, /'sync', '--put'/, '收尾任务也走 sync --put 闸门');
+  assert.match(auto, /'phases', '--put'/, '阶段也走 phases --put 闸门');
+  assert.match(auto, /'memory', '--put'/, '记忆也走 memory --put 闸门');
+  assert.match(auto, /'--scope', 'user'/, '画像写用户表');
+  assert.match(auto, /'--tasks'/, '任务题名也接管');
+  assert.match(auto, /stageSummaries[\s\S]*stageSync[\s\S]*stagePhases[\s\S]*stageMemory[\s\S]*stageProfile/,
+    '五段欠项都在同一份循环里');
+  // 开关本身：setEnabled 只翻开关不动 key；命令与页面都要有
+  assert.match(fs.readFileSync(new URL('../src/llm.mjs', import.meta.url), 'utf8'),
+    /export function setEnabled\(root, on\)/, 'setEnabled 只翻开关');
+  const cli = fs.readFileSync(new URL('../src/cli.mjs', import.meta.url), 'utf8');
+  assert.match(cli, /cmd === 'closeout'/, 'closeout 命令要存在');
+  assert.match(cli, /flags\.on \|\| flags\.off/, 'CLI 要有 --on/--off');
+  const html = fs.readFileSync(new URL('../web/app.html', import.meta.url), 'utf8');
+  assert.match(html, /id="llmauto"/, '设置页要有总闸开关');
 });
 
 console.log(`selftest on ${FILE}\n  runner=${ledger.runner} segments=${segments.length} turns=${facts.turns.total} calls=${facts.toolCalls.total} boundaries=${facts.boundaries.length} routeTokens=${built.indexTokens + built.cardTokens}`);

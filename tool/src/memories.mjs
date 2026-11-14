@@ -28,6 +28,9 @@ import {
 
 /** 项目表的四类。画像天生跨项目，归用户表（P3），项目表不收。 */
 export const MEMORY_CLASSES = ['进度', '经验', '规则', '探索'];
+/** 记忆的维度：和 class 正交。class 说「这是进度/经验/规则/探索」，dimension 说
+ *  它回答用户的哪一类约束（目标、边界、验收、分工……）。旧条目可以没有 dimension。 */
+export const MEMORY_DIMENSIONS = ['目标', '边界', '规则', '偏好', '背景', '验收', '分工', '反馈', '性格'];
 const EXPERIENCE_MOVES = ['ruleout', 'decision', 'insight'];
 
 const SEG_RE = /^S\d{2,}$/;
@@ -82,8 +85,7 @@ function readMemoriesDoc(file, base) {
 
 export const projectMemoryDir = (root, key) => path.resolve(root, '..', 'projects', key).replace(/\\/g, '/');
 
-export function readProjectMemories(root, key) {
-  return readMemoriesDoc(path.join(projectMemoryDir(root, key), 'memories.json'), { scope: 'project', project: key });
+export function readProjectMemories(root, key) {  return readMemoriesDoc(path.join(projectMemoryDir(root, key), 'memories.json'), { scope: 'project', project: key });
 }
 
 function writeProjectMemories(root, key, entries, patch = {}) {
@@ -106,6 +108,123 @@ export const userMemoryDir = (root) => path.resolve(root, '..', 'user').replace(
 
 export function readUserMemories(root) {
   return readMemoriesDoc(path.join(userMemoryDir(root), 'memories.json'), { scope: 'user' });
+}
+
+/** 协作画像：从两张记忆表里挑出「和这个人一起干活要守的」几条，供 brief 注入。
+ *  只读两个 JSON 文件——走 buildContext 会把 store 里几千本账全读一遍，那是 put 时才付得起的代价，
+ *  不能放在每轮注入里。项目表按项目规则取；用户表先保底 验收/边界/反馈，再按当前任务词挑剩下的。 */
+const CORE_DIMS = ['验收', '边界', '反馈'];
+// 场景是固定的任务类型，不是用户记忆正文里的关键词。一个场景对应几类约束；
+// 画像条目可带 scenes（多标签）与 dimension；选择时关键词、条目场景、维度兜底合并使用。
+const SCENE_DIMS = {
+  // 活动 / 阶段
+  plan: ['目标', '边界', '分工', '规则'],
+  research: ['背景', '偏好', '目标'],
+  design: ['偏好', '反馈', '验收', '目标'],
+  build: ['规则', '验收', '边界'],
+  test: ['验收', '反馈', '规则'],
+  review: ['验收', '反馈'],
+  deliver: ['验收', '分工', '反馈'],
+  operate: ['规则', '偏好'],
+  closeout: ['验收', '规则', '偏好'],
+  // 产物 / 领域
+  ui: ['偏好', '验收', '反馈'],
+  web: ['偏好', '验收', '反馈'],
+  graphic: ['偏好', '反馈', '验收'],
+  docs: ['目标', '反馈', '规则'],
+  data: ['背景', '验收', '规则'],
+  code: ['规则', '验收', '边界'],
+  arch: ['目标', '边界', '规则'],
+  tooling: ['偏好', '规则'],
+  config: ['规则', '边界'],
+  // 互动 / 习惯
+  'tool-choice': ['偏好', '规则'],
+  workflow: ['规则', '分工', '偏好'],
+  scope: ['边界', '分工'],
+  feedback: ['反馈', '验收'],
+  quality: ['验收', '反馈'],
+  pacing: ['偏好', '分工'],
+  // 环境
+  local: ['边界', '背景'],
+  'multi-agent': ['分工', '边界'],
+  host: ['边界', '规则'],
+  project: ['目标', '边界'],
+  general: ['目标', '偏好', '性格', '分工'],
+};
+
+export const MEMORY_SCENES = Object.keys(SCENE_DIMS);
+
+const STOP_BIGRAMS = new Set(['这个', '我们', '就是', '可以', '需要', '一下', '还是', '一个', '没有', '不是', '什么', '现在', '已经', '如果', '因为', '所以', '但是', '然后', '以及', '这些']);
+
+function contextTerms(text) {
+  const src = String(text ?? '').toLowerCase();
+  const terms = new Set();
+  for (const w of src.match(/[a-z][a-z0-9._+\/-]{2,}|\d{2,}/g) || []) terms.add(w);
+  const han = src.replace(/[^\u3400-\u9fff]+/g, '');
+  for (let i = 0; i < han.length - 1; i++) {
+    const t = han.slice(i, i + 2);
+    if (!STOP_BIGRAMS.has(t)) terms.add(t);
+  }
+  return terms;
+}
+
+function dimOf(e) { return String(e?.dimension || e?.class || '记忆'); }
+
+function pickCollab(list, cls, max, { core, dims, sceneSet, terms, projectKey }) {
+  const rows = (list || []).filter((e) => e && e.text && e.class === cls)
+    .map((e) => {
+      const dim = dimOf(e);
+      const di = dims ? dims.indexOf(dim) : -1;
+      const explicit = Array.isArray(e.scenes) && e.scenes.length
+        ? e.scenes.filter((x) => MEMORY_SCENES.includes(x))
+        : null;
+      const sceneHit = explicit ? explicit.some((x) => sceneSet.has(x)) : false;
+      const coreIdx = CORE_DIMS.indexOf(dim);
+      const text = `${e.topic || ''} ${e.text || ''} ${dim}`.toLowerCase();
+      let hits = 0;
+      for (const t of terms) if (text.includes(t) && ++hits >= 6) break;
+      let score = coreIdx >= 0 ? 100 - coreIdx * 5 : 0;
+      score += hits * 12; // 关键词命中优先，用来找得更准
+      if (sceneHit) score += 50; // 条目自身有场景标签：直接命中
+      else if (!explicit && di >= 0) score += 30 - di * 2; // 旧条目没有标签时按维度兜底
+      if (projectKey && (e.evidence || []).some((x) => x?.project === projectKey)) score += 4;
+      // 项目规则不按用户场景过滤（dims=null 时始终占位）；用户画像没有标签时才按维度兜底。
+      return { e, dim, score, hits, inScene: dims === null ? true : (sceneHit || (!explicit && di >= 0)) };
+    })
+    .sort((a, b) => b.score - a.score
+      || String(b.e.at || '').localeCompare(String(a.e.at || ''))
+      || String(a.e.id || '').localeCompare(String(b.e.id || '')));
+  const out = [];
+  const seen = new Set();
+  if (core) {
+    for (const dim of CORE_DIMS) {
+      const hit = rows.find((r) => r.dim === dim && !seen.has(dim));
+      if (!hit || out.length >= max) continue;
+      out.push(hit); seen.add(dim);
+    }
+  }
+  for (const r of rows) {
+    if (out.length >= max) break;
+    if (seen.has(r.dim)) continue;
+    if (!r.inScene && !r.hits) continue; // 场景不相关且关键词也没命中，才不占位
+    seen.add(r.dim); out.push(r);
+  }
+  return out.map((r) => ({ tag: r.dim, text: String(r.e.text) }));
+}
+
+export function collabBrief(root, projectKey, { projectMax = 2, userMax = 5, scenes = [], context = '' } = {}) {
+  const dims = [];
+  for (const scene of scenes) for (const d of SCENE_DIMS[scene] || []) if (!dims.includes(d)) dims.push(d);
+  if (!dims.length) dims.push(...SCENE_DIMS.general);
+  const sceneSet = new Set(scenes.length ? scenes : ['general']);
+  const terms = contextTerms(context);
+  const out = [];
+  // 项目规则是项目内约束；用户画像关键词、条目场景标签、维度兜底三路合并。
+  try { out.push(...pickCollab(readProjectMemories(root, projectKey).entries, '规则', projectMax, { core: false, dims: null, sceneSet, terms, projectKey })); }
+  catch { /* 表读不动就当没有 */ }
+  try { out.push(...pickCollab(readUserMemories(root).entries, '画像', userMax, { core: true, dims, sceneSet, terms, projectKey })); }
+  catch { /* 同上 */ }
+  return out;
 }
 
 function writeUserMemories(root, entries, patch = {}) {
@@ -386,6 +505,23 @@ function duplicateGate(cls, text, existing, errors) {
   }
 }
 
+function checkDimension(input, errors) {
+  const d = String(input?.dimension ?? '').trim();
+  if (d && !MEMORY_DIMENSIONS.includes(d)) {
+    errors.push(`dimension 要是 ${MEMORY_DIMENSIONS.join(`/`)}，收到「${d}」`);
+  }
+  return d || null;
+}
+
+function checkScenes(input, errors) {
+  if (input?.scenes == null) return [];
+  if (!Array.isArray(input.scenes)) { errors.push('scenes 要是数组（可为空）'); return []; }
+  const out = [...new Set(input.scenes.map((x) => String(x).trim()).filter(Boolean))];
+  const bad = out.filter((x) => !MEMORY_SCENES.includes(x));
+  if (bad.length) errors.push(`scenes 里有未知场景：${bad.join('/')}；可用：${MEMORY_SCENES.join('/')}`);
+  return out;
+}
+
 /** 校验一条记忆（G0–G5）。返回的行没有 id——id 由 put 按落盘顺序分配/沿用。
  *  修订的类别门槛按「旧证据 + 新证据」合并后那一条算：追加一条引文不该把原本
  *  过了 G4 的规则改红。 */
@@ -395,6 +531,8 @@ export function validateMemoryEntry(input, ctx, { existing = [] } = {}) {
   const topic = String(input?.topic ?? '').trim();
   const text = normWs(input?.text);
   const evidenceIn = Array.isArray(input?.evidence) ? input.evidence : [];
+  const dimension = checkDimension(input, errors);
+  const scenes = checkScenes(input, errors);
 
   // G0 形状
   if (!MEMORY_CLASSES.includes(cls)) {
@@ -444,7 +582,7 @@ export function validateMemoryEntry(input, ctx, { existing = [] } = {}) {
   return {
     ok: !errors.length,
     errors,
-    row: { class: cls, topic, text, evidence, revises: target ? target.id : null },
+    row: { class: cls, topic, text, dimension, scenes, evidence, revises: target ? target.id : null },
   };
 }
 
@@ -522,14 +660,16 @@ export function putProjectMemories(root, project, entries, { rebuild = true, now
       const t = working.find((e) => e.id === r.row.revises);
       t.text = r.row.text;
       t.evidence = mergeEvidence(t.evidence, r.row.evidence);
+      if (r.row.dimension) t.dimension = r.row.dimension;
+      if (r.row.scenes?.length) t.scenes = r.row.scenes;
       t.at = now;
       t.basis = 'model';
       revised.push(t.id);
       return;
     }
     const row = {
-      id: nextId(working), class: r.row.class, topic: r.row.topic, text: r.row.text,
-      evidence: r.row.evidence, revises: null, promoted_to: null, basis: 'model', at: now,
+      id: nextId(working), class: r.row.class, topic: r.row.topic, text: r.row.text, dimension: r.row.dimension,
+      scenes: r.row.scenes, evidence: r.row.evidence, revises: null, promoted_to: null, basis: 'model', at: now,
     };
     working.push(row);
     added.push(row.id);
@@ -573,6 +713,8 @@ export function validateUserEntry(input, ctx, { existing = [] } = {}) {
   const topic = String(input?.topic ?? '').trim();
   const text = normWs(input?.text);
   const evidenceIn = Array.isArray(input?.evidence) ? input.evidence : [];
+  const dimension = checkDimension(input, errors);
+  const scenes = checkScenes(input, errors);
 
   // G9 作用域
   if (cls !== '画像') {
@@ -626,8 +768,20 @@ export function validateUserEntry(input, ctx, { existing = [] } = {}) {
   return {
     ok: !errors.length,
     errors,
-    row: { class: cls, topic, text, evidence, revises: target ? target.id : null },
+    row: { class: cls, topic, text, dimension, scenes, evidence, revises: target ? target.id : null },
   };
+}
+
+/** 从用户表删一条（合并重复画像时用）：只动用户表，按 id 精确匹配；项目表没有删入口。 */
+export function forgetUserEntry(root, id) {
+  const want = String(id ?? '').trim().toUpperCase();
+  if (!want) return { ok: false, errors: ['memory --forget 要一个条目 id（如 U20）'] };
+  const table = readUserMemories(root);
+  const idx = table.entries.findIndex((e) => String(e.id).toUpperCase() === want);
+  if (idx < 0) return { ok: false, errors: [`用户表里没有 ${want}`] };
+  const [row] = table.entries.splice(idx, 1);
+  writeUserMemories(root, table.entries);
+  return { ok: true, removed: row, entries: table.entries };
 }
 
 const nextUserId = (entries) => {
@@ -678,14 +832,16 @@ export function putUserMemories(root, entries, { rebuild = true, now = new Date(
       const t = working.find((e) => e.id === r.row.revises);
       t.text = r.row.text;
       t.evidence = mergeEvidence(t.evidence, r.row.evidence);
+      if (r.row.dimension) t.dimension = r.row.dimension;
+      if (r.row.scenes?.length) t.scenes = r.row.scenes;
       t.at = now;
       t.basis = 'model';
       revised.push(t.id);
       return;
     }
     const row = {
-      id: nextUserId(working), class: r.row.class, topic: r.row.topic, text: r.row.text,
-      evidence: r.row.evidence, revises: null, promoted_from: null, basis: 'model', at: now,
+      id: nextUserId(working), class: r.row.class, topic: r.row.topic, text: r.row.text, dimension: r.row.dimension,
+      scenes: r.row.scenes, evidence: r.row.evidence, revises: null, promoted_from: null, basis: 'model', at: now,
     };
     working.push(row);
     added.push(row.id);
@@ -745,6 +901,7 @@ export function promoteEntry(root, project, entryId, { now = new Date().toISOStr
   if (!targetU) {
     targetU = {
       id: nextUserId(working), class: '规则', topic: entry.topic, text: entry.text,
+      dimension: entry.dimension ?? null, scenes: entry.scenes ?? [],
       evidence: mergeEvidence([], evidence), revises: null,
       promoted_from: { project: project.key, id: entry.id }, sources: sources.slice(),
       basis: 'model', at: now,
@@ -753,6 +910,11 @@ export function promoteEntry(root, project, entryId, { now = new Date().toISOStr
   } else {
     targetU.text = entry.text;
     targetU.topic = entry.topic;
+    if (entry.dimension) targetU.dimension = entry.dimension;
+    if (entry.scenes?.length) {
+      targetU.scenes = [...new Set([...(targetU.scenes ?? []), ...entry.scenes])]
+        .filter((x) => MEMORY_SCENES.includes(x));
+    }
     targetU.evidence = mergeEvidence(targetU.evidence, evidence);
     targetU.sources = [...(targetU.sources ?? []), ...sources]
       .filter((s, i, all) => all.findIndex((x) => x.project === s.project && x.id === s.id) === i);
@@ -1067,9 +1229,11 @@ export function digestMaterials(root, project, { all = false, max = MEMORY_DIGES
     '进度: ≥1 条证据落在有主线步号的块；text 里的数字/文件名必须在证据所属块与阶段的事实里逐字出现',
     '经验: ≥1 条 claim，move ∈ ruleout/decision/insight',
     '规则: ≥1 条 claim，move = rule',
+    '维度: 每条尽量带 dimension（目标/边界/规则/偏好/背景/验收/分工/反馈/性格）；class 说是什么，dimension 说回答用户哪一类约束',
+    `场景: 可选 scenes（${MEMORY_SCENES.join('/')}）；按适用的工作场景多选，不适用留空`,
     '探索: ≥1 条 claim，move = open，或一条仍 pending 的请求',
     '## 输出形状（memory --put -）',
-    '{"entries":[{"class":"规则","topic":"把手","text":"一句话","evidence":[{"sid":"<sid8>","seg":"S35","hash":"<contentHash 前12位>","kind":"claim|say","quote":"逐字"}],"revises":null}]}',
+    '{"entries":[{"class":"规则","topic":"把手","text":"一句话","dimension":"边界","scenes":["ui","design"],"evidence":[{"sid":"<sid8>","seg":"S35","hash":"<contentHash 前12位>","kind":"claim|say","quote":"逐字"}],"revises":null}]}',
     '证据也可以是一条仍 pending 的请求：{"sid":"<sid8>","rid":"R03"}（不存引文）。',
     'hash 取 ledger.json 的 segments[].contentHash 前 12 位。写入口会先重建再核锚点。',
     '素材里没有的，写不出来。',
@@ -1121,9 +1285,12 @@ export function digestUserMaterials(root, { max = MEMORY_DIGEST_TOKENS } = {}) {
   const tail = [
     '## 类别口径（G4：一条不过整批不写）',
     '画像: ≥2 个不同会话，每个至少 1 条 kind=say；引文必须是真人原话（工具回执与压缩摘要不算）',
+    '画像范围: 收两类——工作要求/偏好，以及可复用的沟通、决策与性格特征（如直接、要实证、要完整）；只写有跨会话原话支撑的倾向，不做心理诊断、不贴贬义标签',
+    '维度: 每条尽量带 dimension（目标/边界/规则/偏好/背景/验收/分工/反馈/性格）；缺哪个维度就补哪个，没有证据的维度如实留空',
+    `场景: 可选 scenes（${MEMORY_SCENES.join('/')}）；按适用的工作场景多选，不适用留空`,
     '规则: 只能 memory --promote 从 ≥2 个项目的等价规则合成，不能直接写用户表（G8）',
     '## 输出形状（memory --put --scope user -）',
-    '{"entries":[{"class":"画像","topic":"把手","text":"一句话","evidence":[{"project":"<项目键|名字>","sid":"<sid8>","seg":"S07","hash":"<contentHash 前12位>","kind":"say","quote":"逐字"}],"revises":null}]}',
+    '{"entries":[{"class":"画像","topic":"把手","text":"一句话","dimension":"偏好","scenes":["ui","design"],"evidence":[{"project":"<项目键|名字>","sid":"<sid8>","seg":"S07","hash":"<contentHash 前12位>","kind":"say","quote":"逐字"}],"revises":null}]}',
     '证据每条都要 project：画像天生跨项目。hash 取 ledger.json 的 segments[].contentHash 前 12 位；写入口先重建再核锚点。',
     '素材里没有的，写不出来。',
   ];

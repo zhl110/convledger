@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="author" content="再来一杯海星酒 (zhl110)">
+<title>convledger · 制作人 再来一杯海星酒</title>
+<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192-v2.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#e9edf2">
+<link rel="stylesheet" href="/app.css">
+<style>
+  html,body{background:#e9edf2;color:#141b26;margin:0}
+  #boot{position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;background:#e9edf2}
+  #boot .bcard{display:flex;flex-direction:column;align-items:center;gap:12px;padding:24px 32px;
+    border:1px solid rgba(20,27,38,.10);border-radius:14px;background:#ffffff;min-width:250px;
+    box-shadow:0 8px 24px rgba(16,24,40,.08);
+    font:13px/1.5 "Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif}
+  #boot .bmark{width:48px;height:48px;border-radius:12px;overflow:hidden;box-shadow:0 1px 2px rgba(16,24,40,.08)}
+  #boot .bmark img{width:100%;height:100%;object-fit:cover;display:block}
+  #boot b{font-size:15px;font-weight:600}
+  #boot p{margin:0;color:#66788f;font-size:12px}
+  #boot .bbar{width:176px;height:4px;border-radius:4px;background:#f2f5f9;border:1px solid rgba(20,27,38,.10);overflow:hidden}
+  #boot .bbar i{display:block;width:40%;height:100%;background:#0e7490;border-radius:4px;
+    animation:bg 1.1s ease-in-out infinite alternate}
+  @keyframes bg{from{transform:translateX(-40%)}to{transform:translateX(210%)}}
+</style>
+</head>
+<body>
+<div id="boot"><div class="bcard"><div class="bmark"><img src="/icons/icon-192-v2.png" alt=""></div><b>正在启动本机看板</b><p id="bootmsg">正在连接到本地服务…</p><div class="bbar"><i></i></div></div></div>
+<div class="shell">
+  <aside class="rail">
+    <a class="brand" href="/app" title="convledger 本机看板"><img src="/icons/icon-192-v2.png" alt=""></a>
+    <nav>
+      <a href="/app" data-view="board" class="on" title="本机看板">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1.4"/><rect x="11" y="3" width="6" height="6" rx="1.4"/><rect x="3" y="11" width="6" height="6" rx="1.4"/><rect x="11" y="11" width="6" height="6" rx="1.4"/></svg>
+        <span>看板</span>
+      </a>
+      <a href="/app?view=sessions" data-view="sessions" title="会话">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 4h12M4 9h12M4 14h8"/><circle cx="15.5" cy="14.5" r="2.2"/></svg>
+        <span>会话</span>
+      </a>
+      <a href="/app?view=canvas" data-view="canvas" title="会话地图">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="5" cy="5" r="2"/><circle cx="15" cy="8" r="2"/><circle cx="7" cy="15" r="2"/><path d="M6.8 5.6 13 7.4M14 9.8 8.4 13.6"/></svg>
+        <span>地图</span>
+      </a>
+      <a href="/app?view=work" data-view="work" title="项目工作台">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="4" width="14" height="12" rx="1.5"/><path d="M3 8h14M8 8v8"/></svg>
+        <span>工作台</span>
+      </a>
+      <a href="/app?view=usage" data-view="usage" title="Token 用量">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 16V9M10 16V4M16 16v-5"/><path d="M3 17h14"/></svg>
+        <span>用量</span>
+      </a>
+      <a href="/app?view=arch" data-view="arch" title="架构与路线图">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="3" y="3" width="5" height="4" rx="1"/><rect x="12" y="3" width="5" height="4" rx="1"/><rect x="7.5" y="13" width="5" height="4" rx="1"/><path d="M5.5 7v3h9V7M10 10v3"/></svg>
+        <span>架构</span>
+      </a>
+      <a href="/app?view=settings" data-view="settings" title="模型配置">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="2.6"/><path d="M10 3v2M10 15v2M3 10h2M15 10h2M5.2 5.2l1.4 1.4M13.4 13.4l1.4 1.4M14.8 5.2l-1.4 1.4M6.6 13.4l-1.4 1.4"/></svg>
+        <span>模型配置</span>
+      </a>
+    </nav>
+    <div class="now" id="railnow" hidden title="正在看的这段会话">当前会话<b id="railnowname">—</b><span id="railnowmeta"></span></div>
+    <div class="railcredit" title="制作人 再来一杯海星酒 · GitHub zhl110"><span>制作人</span><b>再来一杯海星酒</b></div>
+    <div class="railfoot" id="railfoot" title="本机服务状态"><i id="hdot"></i><span id="hstate">…</span></div>
+  </aside>
+
+  <div class="pane">
+    <header class="top">
+      <div class="titles">
+        <h1 id="viewtitle">本机看板</h1>
+        <p id="sub">正在读取本机账本…</p>
+      </div>
+      <div class="tools">
+        <span class="updating" id="updating" hidden><i aria-hidden="true"></i>正在更新最新信息</span>
+        <span class="live" id="live">实时 —</span>
+        <button type="button" id="refresh" title="立即重读（R）">刷新</button>
+        <kbd title="立即重读">R</kbd>
+        <button type="button" id="pause" class="pausetop" title="全局暂停：停掉常驻服务、释放后台内存；双击桌面「convledger 地图」再恢复">全局暂停</button>
+      </div>
+    </header>
+
+    <main>
+      <section id="view-board" class="view">
+        <section class="overview">
+          <section class="moment" aria-label="整理覆盖">
+            <div class="covtop"><span>整理覆盖 · 块综述</span><i class="led idle" id="covled"></i></div>
+            <div class="covpct" id="covpct">—</div>
+            <div class="covbar"><i id="covfill"></i></div>
+            <div class="covnote" id="covnote">正在读取…</div>
+          </section>
+          <section class="readout" id="totals" aria-label="账本总量"></section>
+        </section>
+
+        <section class="block">
+          <div class="head">
+            <h2>本机 agent</h2>
+            <div class="globalprefs">
+              <label>画像
+                <select id="prefProfile" class="apselect">
+                  <option value="auto">自动</option>
+                  <option value="off">关</option>
+                </select>
+              </label>
+              <label>建账
+                <select id="prefAutoBuild" class="apselect">
+                  <option value="active">活跃</option>
+                  <option value="all">全部</option>
+                  <option value="off">关</option>
+                </select>
+              </label>
+            </div>
+          </div>
+          <div class="agents" id="agents"></div>
+          <div class="toast" id="toast" hidden></div>
+        </section>
+
+        <div class="grid">
+          <section class="panel">
+            <div class="head"><h2>最近会话</h2><a href="/app?view=sessions" data-view="sessions">全部会话</a></div>
+            <ul class="list" id="sessions"></ul>
+          </section>
+          <section class="panel">
+            <div class="head"><h2>最近经验</h2></div>
+            <ul class="list" id="lessons"></ul>
+          </section>
+          <section class="panel">
+            <div class="head"><h2>记忆摘录</h2></div>
+            <ul class="list" id="mems"></ul>
+          </section>
+        </div>
+
+        <section class="panel">
+          <div class="head"><h2>最近事件</h2></div>
+          <ul class="list events" id="events"></ul>
+        </section>
+
+        <p class="foot">convledger · 127.0.0.1:8765 · 制作人 再来一杯海星酒</p>
+      </section>
+
+      <section id="view-sessions" class="view" hidden>
+        <div class="viewhead">
+          <p id="sessioncount">正在读取…</p>
+          <input id="sessionq" type="search" autocomplete="off" placeholder="搜标题 / 工作区 / 会话 ID">
+        </div>
+        <div id="sessiongroups"></div>
+      </section>
+
+      <section id="view-canvas" class="view" hidden>
+        <div class="screen"><iframe id="canvasframe" title="会话地图"></iframe></div>
+      </section>
+
+      <section id="view-work" class="view" hidden>
+        <div class="workbar">
+          <label class="workpick">项目<select id="workproj" aria-label="选择项目"></select></label>
+        </div>
+        <div class="screen"><iframe id="workframe" title="项目工作台"></iframe></div>
+      </section>
+
+      <section id="view-usage" class="view" hidden>
+        <div class="usum readout" id="usagetotals"></div>
+
+        <section class="panel">
+          <div class="head"><h2>按 agent</h2><span id="usagescan"></span></div>
+          <div class="usrcwrap"><table class="utable" id="usagesources"></table></div>
+        </section>
+
+        <section class="panel">
+          <div class="head">
+            <h2>每个会话</h2>
+            <input id="usageq" type="search" autocomplete="off" placeholder="搜会话">
+            <span id="usagecount"></span>
+          </div>
+          <div id="usagesessions"></div>
+        </section>
+
+        <div class="grid usagegrid">
+          <section class="panel">
+            <div class="head"><h2>回填上下文</h2><span id="usageinjmeta"></span></div>
+            <div class="uinj uhead" id="usageinjhead"><span>时间</span><span>事件</span><span>会话</span><span class="r">实际</span></div>
+            <ul class="list uinj" id="usageinjections"></ul>
+          </section>
+          <section class="panel">
+            <div class="head"><h2>回读</h2><span id="usagerbmeta"></span></div>
+            <div id="usagereadback"></div>
+          </section>
+        </div>
+      </section>
+
+      <section id="view-arch" class="view" hidden>
+        <div class="screen"><iframe id="archframe" title="架构与工作路线图" data-src="/architecture?embed=1"></iframe></div>
+      </section>
+
+      <section id="view-settings" class="view" hidden>
+        <section class="panel">
+          <div class="head"><h2>已存的 Key</h2><span id="llmkeystate">正在读取…</span></div>
+          <p class="hint">贴过的 key 都记在这台机器 <code>tool/out/store/llm.json</code>（不进版本库）。
+            明文只在贴入那刻可见，之后一律脱敏显示；点一条就切过去，不用重贴。</p>
+          <ul class="llmkeys" id="llmkeys"></ul>
+        </section>
+        <section class="panel">
+          <div class="head"><h2>接入新的 Key</h2><span id="llmstate">正在读取…</span><button type="button" id="llmauto" class="llmtoggle" title="补账总闸：开＝接了模型由后台静默补（没接则由当前 Agent 补）；关＝后台模型与当前 Agent 都不再补综述，欠项留着不派。key 保留，随时可再开"></button></div>
+          <p class="hint">贴一个 API key，工具自己认出它属于哪家（OmniRoute / DeepSeek / OpenAI…），认出来就直接接上、记进上面的钥匙串。
+            接上之后补账能自己跑，不用再借当前对话的 Agent。</p>
+          <div class="llmform">
+            <label>API Key
+              <input id="llmkey" type="password" autocomplete="off" placeholder="粘贴 key；已接上时留空表示不改">
+            </label>
+            <label>端点
+              <input id="llmbase" type="text" autocomplete="off" placeholder="留空则拿 key 逐个试候选端点">
+            </label>
+            <label>模型
+              <input id="llmmodel" type="text" autocomplete="off" placeholder="留空则自动挑便宜快的（flash / mini 优先）">
+            </label>
+            <div class="llmact">
+              <button type="button" id="llmsave">接上</button>
+              <button type="button" id="llmbridge">读本机 OW Bridge</button>
+              <button type="button" id="llmtest">测试连通</button>
+              <button type="button" id="llmclear" class="ghost">断开</button>
+            </div>
+            <div class="llmmsg" id="llmmsg" hidden></div>
+            <ul class="llmmodels" id="llmmodels"></ul>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="head"><h2>关于</h2></div>
+          <p class="hint">制作人：再来一杯海星酒 · GitHub <a href="https://github.com/zhl110" target="_blank" rel="noopener">zhl110</a> · 仓库 <a href="https://github.com/zhl110/convledger" target="_blank" rel="noopener">convledger</a></p>
+        </section>
+      </section>
+    </main>
+  </div>
+</div>
+<script>
+  // app.js 被门禁挡住或缓存坏了时，启动页不能永远一个样子：15 秒后给一句可行动的状态。
+  setTimeout(function () {
+    var b = document.getElementById('boot'); if (!b) return;
+    var m = document.getElementById('bootmsg'); if (m) m.textContent = '连接超时 · 关掉窗口重开';
+  }, 15000);
+</script>
+<script src="/app.js"></script>
+</body>
+</html>

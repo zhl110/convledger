@@ -1,9 +1,11 @@
-# CHANGELOG · conversation-graph-research
+# CHANGELOG · convledger
 
 只记**对外可见的行为变化与修复**：命令面、页面行为、回执文案、被判据挡下的东西。
-判据细则、契约与实测数字的权威副本在 [`tool/RESULT.md`](tool/RESULT.md)（按节）与各 `tool/PRD-*.md`（按轮），本文件不重复抄长文，只标出处与 commit。
+判据细则、契约与实测数字在开发仓维护；公开仓只留行为级变更摘要。
 
-倒序。日期为提交日期（本地时区）。`§N` 指 `tool/RESULT.md` 的第 N 节。本仓 2026-10-23 由外层仓 subtree split 出来，记录从那天起；更早的历史在外层仓与 `tool/RESULT.md` §一～§十二。
+倒序。日期为提交日期（本地时区）。
+
+> **读法（重要）**：历史条目里的「未实测 / 部分验证 / 不能用」都是当时的结论，倒序留痕不改，不代表当前状态；当前接入状态以 `convledger caps --json` 的 `status` / `gaps` 为准。
 
 ---
 
@@ -14,6 +16,42 @@
 - 公开仓 `LICENSE.md` 从自定义源码可见条款换成 [PolyForm Shield License 1.0.0](https://polyformproject.org/licenses/shield/1.0.0)，并写入 `Required Notice`。
 - 允许免费使用、修改与非竞争性分发；不得提供与 convledger 竞争的产品；分发须随附本许可与 `Required Notice`。
 - README 许可段与 `tool/package.json` 的 `license` 字段同步。这是 PolyForm 的源码可见许可，不是 OSI 开源许可。
+
+## 2026-11-14 · 模型接管补账、应用窗与署名
+
+### Added
+
+- 设置页可直接填 API Key；命令行等价 `convledger llm --key <key>`、`llm --bridge`、`llm --key <k> --base-url <url>`、`llm --test`。接上模型后，`closeout --auto` 接管块综述、收尾任务、题名、阶段、项目记忆与用户画像；hook 不再把补账派给当前 Agent。
+- `convledger usage` / `usage --json` 查看宿主上报的 token 与工具回读开销。
+- 本机 Agent 卡片内直接调「收尾」（按真人回合：每轮 / 每 5 轮 / 压缩时）与「补账」（按缺块数：每轮 / 缺 5 块 / 压缩时）。
+- 应用窗：`convledger app` 用 Edge/Chrome `--app` 打开 `/app` 本机看板；窗口图标由 favicon/manifest 提供；Windows 通知区域常驻托盘图标（打开 / 重启 / 退出）。
+- 资产署名：应用标题、左栏、看板页脚、设置「关于」、网页 meta 与 `package.json` 统一标注「制作人 再来一杯海星酒 · GitHub zhl110」。
+
+### Fixed
+
+- 桌面应用窗卡在「正在连接到本地服务」：门禁 token 单独落盘并优先复用，hub 重启不再换钥匙；带 `?k=` 的响应会刷新过期 cookie；启动页 15 秒后给出超时提示。
+- 工作台项目表首次打开可能永久空白：改为 30 秒缓存并在工作台视图内重拉。
+- 打开应用窗不再闪 PowerShell 黑框：托盘改由 `wscript.exe` 以隐藏窗口启动。
+
+### Changed
+
+- 用户画像按当前任务选择注入：条目场景标签优先，旧条目按维度兜底，关键词补位；场景标签覆盖活动/阶段、产物/领域、互动/习惯、环境四轴。
+- 补账素材去掉工具回执与系统提醒，读/搜与运行回执不再进记忆。
+- 去掉 Electron 壳，桌面窗回到 Edge/Chrome 应用窗，运行时依赖仍为零。
+
+## 2026-11-13 · 按 Agent 装、默认不常驻、工具可接模型
+
+### Added
+
+- 安装改为按 Agent 选装：`install.cmd` → `setup --choose`，每家另有 `install-<agent>.cmd`，`--client all` 才装全部；默认只建当前会话的账，历史用 `--build N` / `--all`。
+- App 顶栏「全局暂停」：写 `tool/out/HUB-PAUSED` 并停掉常驻 hub；双击桌面图标或 `convledger map` 恢复。
+- `upgrade` / `upgrade --check`：检查 Skill 副本、常驻 hub 与版本水位；`git pull` 后由本机 git hooks 自动触发。纯版本升级只做轻量确认，全量自测只在改过源码/测试时跑。
+- 宿主状态改为机器可读单一源：`convledger caps --json` 的 `status` / `gaps` 是唯一权威。
+
+### Changed
+
+- 补账档位分层设置，默认跟机器级；没有证据的项保持「待补」，不代写。
+- 长历史按片建账，主线程不扫全库；全库汇总、状态快照与用量统计交给后台 worker。
 
 ## 2026-11-09 · 清理对外文案里对其它产品的引用
 
@@ -82,7 +120,7 @@
 
 ### 发布
 
-- `v0.1.0`（annotated tag，指向 `0a1138e`）是本仓第一个对外版本，与 `tool/package.json` 的 0.1.0 对齐；GitHub Release 正文给能力面、三步安装、**五条如实的已知边界**和 RESULT/PRD 指针。仓保持私有。
+- `v0.1.0`（annotated tag，指向 `0a1138e`）是本仓第一个对外版本，与 `tool/package.json` 的 0.1.0 对齐；GitHub Release 正文给能力面、三步安装与**五条如实的已知边界**。
 
 ## 2026-11-03 · 新设备一键装：从头走一遍才看得见第一步的坑（§九十九）
 

@@ -3,16 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>convledger · 会话流程图</title>
+<meta name="author" content="再来一杯海星酒 (zhl110)">
+<title>convledger · 会话流程图 · 制作人 再来一杯海星酒</title>
 <link rel="stylesheet" href="/atlas.css">
-<link rel="icon" type="image/svg+xml" href="/icon-small.svg">
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192-v2.png">
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#0b1220">
 </head>
 <body data-theme="dark">
+<script>if(new URLSearchParams(location.search).get('embed')==='1')document.body.classList.add('embed');</script>
 <header>
   <div class="brand"><div class="brandline"><i class="brandmark" aria-hidden="true"></i><b>convledger</b><span>会话流程图</span></div></div>
   <nav class="nav" aria-label="视图切换">
     <button id="libbtn" title="已导入的会话（快捷键 L）" aria-pressed="true"><svg class="hicon" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2"/><line x1="6" y1="2.75" x2="6" y2="13.25"/></svg>会话</button>
-    <a id="projpage" class="hlink" href="#" hidden title="项目任务页：总览 / 远景 / 中景 / 近景，任务与验收"><svg class="hicon" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2"/><line x1="4.75" y1="6" x2="11.25" y2="6"/><line x1="4.75" y1="8.5" x2="11.25" y2="8.5"/><line x1="4.75" y1="11" x2="8.75" y2="11"/></svg>项目页</a>
+    <a id="projpage" class="hlink" href="#" hidden title="项目工作台：任务、经验与画像；总览 / 远景 / 中景 / 近景，任务与验收"><svg class="hicon" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1.75" y="2.75" width="12.5" height="10.5" rx="2"/><line x1="4.75" y1="6" x2="11.25" y2="6"/><line x1="4.75" y1="8.5" x2="11.25" y2="8.5"/><line x1="4.75" y1="11" x2="8.75" y2="11"/></svg>工作台</a>
   </nav>
   <div class="meters" id="meters"></div>
   <label class="find"><input id="find" type="search" placeholder="找：段号 / 一句话 / 结论" autocomplete="off"><span id="findn"></span></label>
@@ -20,7 +24,6 @@
     <button id="now" title="飞到最新的一块（快捷键 N）"><svg class="hicon" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="4.25"/><line x1="8" y1="1.5" x2="8" y2="3.75"/><line x1="8" y1="12.25" x2="8" y2="14.5"/><line x1="1.5" y1="8" x2="3.75" y2="8"/><line x1="12.25" y1="8" x2="14.5" y2="8"/><circle cx="8" cy="8" r="1" fill="currentColor" stroke="none"/></svg>现在</button>
     <button id="fit" title="把所有块缩进一屏（快捷键 F）"><svg class="hicon" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2.75H3.75a1 1 0 0 0-1 1V6"/><path d="M10 2.75h2.25a1 1 0 0 1 1 1V6"/><path d="M6 13.25H3.75a1 1 0 0 1-1-1V10"/><path d="M10 13.25h2.25a1 1 0 0 0 1-1V10"/></svg>适应</button>
     <button id="theme" title="深色 / 浅色"><svg class="hicon" aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="8" r="5.25"/><path d="M8 2.75a5.25 5.25 0 0 1 0 10.5Z" fill="currentColor" stroke="none"/></svg></button>
-    <label class="cadence" title="补账档位：一块收口后，什么时候让当前会话的 agent 把它的综述补上"><span>补账</span><select id="cadence"><option value="each">每轮</option><option value="every5">每 5 轮</option><option value="compact">压缩时</option></select></label>
   </div>
   <span class="live" id="live">连接中…</span>
   <div class="who" id="who"></div>
@@ -32,7 +35,7 @@
     <label class="libfind"><input id="libfind" type="search" placeholder="找会话：标题 / 目录 / sid" autocomplete="off"></label>
     <span id="libn"></span>
   </div>
-  <div id="libbody"><div class="libempty">读取中…</div></div>
+  <div id="libbody" aria-busy="true"><div class="libskel" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></div><div class="libempty libwait">正在读会话清单…</div></div>
   <div class="libfoot" id="libfoot"></div>
 </aside>
 <div id="libsplit" role="separator" aria-orientation="vertical" title="拖拽调整宽度；拖到最左收成一列状态灯（双击回到默认宽度）"></div>
@@ -43,6 +46,12 @@
     <svg id="wires" xmlns="http://www.w3.org/2000/svg"></svg>
     <div id="bands"></div>
     <div id="cards"></div>
+  </div>
+  <div id="bootskel" role="status" aria-live="polite">
+    <span class="bslabel">正在载入这段会话…</span>
+    <span class="bsrow" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span class="bsrow" aria-hidden="true"><i></i><i></i><i></i></span>
+    <span class="bshint">会话大时要读一会儿；读完自动换成画布</span>
   </div>
   <div id="rowhint"></div>
   <div id="chapnote" hidden aria-label="当前这一章的接手页"></div>

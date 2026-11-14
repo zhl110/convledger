@@ -8,8 +8,14 @@ import path from 'node:path';
 import { archiveState } from './store.mjs';
 import { hostTitleFor } from './host-titles.mjs';
 import { outstandingFor } from './outstanding.mjs';
+import { sourceIndex } from './project.mjs';
+import { readInternal } from './internal.mjs';
 
 export const LIVE_MIN = 15;
+// 真实账本根（tool/out/store）。只有它才列未建账的源会话、才认未导入 id——
+// 测试用的临时 store 绝不能把真机几百段对话扫进清单（与 map 的 sweep 守卫同一把尺）。
+export const DEFAULT_STORE = path.resolve(new URL('../out/store/', import.meta.url).pathname.replace(/^\/(\w:)/, '$1')).replace(/\\/g, '/');
+export const isDefaultStore = (root) => String(root).replace(/\\/g, '/') === DEFAULT_STORE;
 export const RUNNER_LABEL = { qoder: 'Qoder', 'claude-code': 'Claude Code', workbuddy: 'WorkBuddy', opencode: 'OpenCode' };
 const GROUP_ORDER = ['qoder', 'claude-code', 'workbuddy'];
 // 缓存上限必须大于一台机器上可能的会话数：200 上限撞上 237 个会话时，
@@ -107,6 +113,7 @@ function staticOf(dir) {
     ...titleOf(dir, cwd),
     archive: archiveState(dir),
     organize,
+    built: true,
   };
   CACHE.set(dir, { key, st: entry });
   if (CACHE.size > CACHE_MAX) CACHE.delete(CACHE.keys().next().value);
@@ -139,12 +146,55 @@ function statusOf(dir, entry, now) {
   };
 }
 
-/** 已建账的会话 id：全等优先，其次前缀（与 --session 的语义一致）。 */
+/** 未建账源会话的廉价条目：只有源 stat 与宿主标题，没有段数/整理度（那要建账才有）。
+ *  左栏标灰＋「未导入」，打开才建账（PRD-load §2.3）。不读 outstandingFor、不算整理度。 */
+function unbuiltEntry(s, current, now, liveMin) {
+  const host = hostTitleFor(s.sessionId, { sourceFile: s.file, runner: s.runner });
+  let title = host, titleFrom = 'host';
+  if (!title) {
+    // 宿主库没有这段（如 Claude Code）：廉价读源文件头取 cwd 尾，再不行就叫「未导入会话」。
+    const m = readHead(s.file, 4096).match(/"cwd"\s*:\s*"([^"]+)"/);
+    const tail = m ? cwdTail(m[1]) : '';
+    title = tail || '未导入会话';
+    titleFrom = tail ? 'cwd' : 'unbuilt';
+  }
+  const srcMs = Date.parse(s.mtime) || 0;
+  const idleMin = srcMs ? Math.max(0, Math.round((now - srcMs) / 60000)) : null;
+  return {
+    id: s.sessionId,
+    sid8: String(s.sessionId).slice(0, 8),
+    runner: s.runner || 'unknown',
+    cwd: '', cwdTail: '', workspace: '',
+    segments: null,
+    sourceBytes: s.bytes ?? 0,
+    builtAt: null,
+    sourceFile: s.file,
+    title, titleFrom,
+    archive: { exists: false, bytes: 0, syncedAt: null },
+    organize: null,
+    built: false,
+    sourceExists: true,
+    sourceMissing: false,
+    lastWriteAt: s.mtime ?? null,
+    idleMin,
+    live: idleMin != null && idleMin <= liveMin,
+    current: s.sessionId === current,
+  };
+}
+
+/** 会话 id：已建账全等/前缀优先；默认 store 下再认未建账的源会话（未导入的也点得开）。 */
 export function findSession(root, spec) {
   if (!spec) return null;
   if (!fs.existsSync(root)) return null;
   const ids = fs.readdirSync(root).filter((d) => fs.existsSync(path.join(root, d, 'ledger.json')));
-  return ids.find((x) => x === spec) ?? ids.find((x) => x.startsWith(spec)) ?? null;
+  const built = ids.find((x) => x === spec) ?? ids.find((x) => x.startsWith(spec));
+  if (built) return built;
+  if (!isDefaultStore(root)) return null;
+  const have = new Set(ids);
+  const unbuilt = sourceIndex().list.filter((s) => !have.has(s.sessionId));
+  return unbuilt.find((s) => s.sessionId === spec)?.sessionId
+    ?? unbuilt.find((s) => s.sessionId.startsWith(spec))?.sessionId
+    ?? null;
 }
 
 /** 清单本体。静态部分走缓存；live / idleMin 每次现算，不然点会停在旧状态。 */
@@ -154,16 +204,30 @@ export function libraryOf(root, { current = null, now = Date.now(), liveMin = LI
     : [];
   const entries = [];
   let skipped = 0;
+  // 本工具派的后台工作会话（内部会话）不进会话库：它们也是一段对话，但列出来既乱又会被误当「用户会话」统计。
+  const internalSet = new Set(Object.keys(readInternal(root).sids));
   for (const dir of dirs) {
     if (!fs.existsSync(path.join(dir, 'ledger.json'))) continue;   // 还没建账
     try {
       const st = staticOf(dir);
       if (!st) { skipped++; continue; }
+      if (internalSet.has(st.id)) continue;   // 内部会话：隐藏
       // 宿主标题优先：桌面端左侧怎么叫，这里就怎么叫；没有才回落到账本派生标题。
       const host = hostTitleFor(st.id, { sourceFile: st.sourceFile, runner: st.runner });
       const shown = host ? { ...st, title: host, titleFrom: 'host' } : st;
       entries.push({ ...shown, ...statusOf(dir, shown, now), current: shown.id === current });
     } catch { skipped++; }
+  }
+  // 未建账的旧对话仍列出（标灰/未导入），但不建账——只有默认 store 才扫真机源目录，
+  // 测试临时 store 绝不把真会话扫进来。廉价：sourceIndex 带 15s 缓存，只 stat 不 build。
+  const builtCount = entries.length;
+  if (isDefaultStore(root)) {
+    const have = new Set(entries.map((e) => e.id));
+    let unbuilt = [];
+    try { unbuilt = sourceIndex({ now }).list.filter((s) => s.bytes > 0 && !have.has(s.sessionId) && !internalSet.has(s.sessionId)); } catch { /* 扫不动就只列已建账 */ }
+    for (const s of unbuilt) {
+      try { entries.push(unbuiltEntry(s, current, now, liveMin)); } catch { /* 一段列不出不拖垮清单 */ }
+    }
   }
   const byRunner = new Map();
   for (const e of entries) {
@@ -193,6 +257,7 @@ export function libraryOf(root, { current = null, now = Date.now(), liveMin = LI
     at: new Date(now).toISOString(),
     counts: {
       sessions: entries.length, live: entries.filter((x) => x.live).length, skipped,
+      built: builtCount, unbuilt: entries.length - builtCount,
       // 「整理过」＝模型层至少写过一样且还有效；只建了结构账的不算。
       organized: entries.filter((x) => x.organize && x.organize.level !== 'none').length,
     },

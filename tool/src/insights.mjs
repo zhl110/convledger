@@ -72,7 +72,7 @@ export function projectExperience(storeRoot, key, { maxSessions = 8, maxLessons 
 
 const pickClass = (entries, cls) => (entries ?? [])
   .filter((e) => e?.class === cls)
-  .map((e) => ({ id: e.id, text: e.text, at: e.at ?? null, topic: e.topic ?? null, evidence: Array.isArray(e.evidence) ? e.evidence : [] }));
+  .map((e) => ({ id: e.id, text: e.text, at: e.at ?? null, topic: e.topic ?? null, dimension: e.dimension ?? null, evidence: Array.isArray(e.evidence) ? e.evidence : [] }));
 
 /** 记忆表原样搬出来，不在这里判新鲜——失效判定在 memories 模块，页面只显示表里有的。
  *  空就返回空数组，页面写「0 条」并给出写入口，不编。 */

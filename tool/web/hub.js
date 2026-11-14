@@ -194,18 +194,20 @@
       });
       box.appendChild(head);
       shownRows.forEach(function (x) {
-        var a = el('a', 'row' + (x.live ? ' live' : ''));
+        var unbuilt = x.built === false;
+        var a = el('a', 'row' + (x.live ? ' live' : '') + (unbuilt ? ' unbuilt' : ''));
         a.href = '/s/' + encodeURIComponent(x.id) + '/';
-        a.title = x.title + '\n' + x.cwd + '\n' + x.sid8 + ' · 标题来自 ' + (x.titleFrom === 'host' ? '桌面端' : x.titleFrom);
+        a.title = x.title + '\n' + x.cwd + '\n' + x.sid8 + ' · 标题来自 ' + (x.titleFrom === 'host' ? '桌面端' : x.titleFrom === 'unbuilt' ? '未导入' : x.titleFrom);
         a.appendChild(el('i', 'dot'));
         var lt = el('div', 'lt');
         lt.appendChild(el('div', 'title', x.title));
         lt.appendChild(el('div', 'ws', '工作区 · ' + (x.workspace || '无')));
         lt.appendChild(el('div', 'meta',
-          x.sid8 + ' · ' + x.segments + ' 段 · ' + (x.sourceMissing ? '源已丢 · 正文读归档' : '最后写入 ' + ago(x.idleMin))));
+          x.sid8 + ' · ' + (unbuilt ? '未建账 · 打开才建' : x.segments + ' 段') + ' · ' + (x.sourceMissing ? '源已丢 · 正文读归档' : '最后写入 ' + ago(x.idleMin))));
         var o = x.organize;
-        var chip = el('span', 'org ' + (o ? o.level : 'none'));
-        if (!o) chip.textContent = '整理层读不出';
+        var chip = el('span', 'org ' + (unbuilt ? 'unbuilt' : (o ? o.level : 'none')));
+        if (unbuilt) chip.textContent = '未导入 · 打开才建账';
+        else if (!o) chip.textContent = '整理层读不出';
         else if (o.level === 'none') chip.textContent = '未整理 · 只有结构账（' + o.blocks + ' 块）';
         else {
           chip.textContent = (o.level === 'full' ? '已整理' : '欠 ' + o.gaps + ' 项')
@@ -213,14 +215,15 @@
             + (o.phases ? ' · 阶段 ' + o.phases : '')
             + (o.titlesOf ? ' · 题名 ' + o.titles + '/' + o.titlesOf : '');
         }
-        chip.title = o ? ('模型层写过：块综述 ' + o.sums + ' 条有效'
+        chip.title = unbuilt ? '这段还没建账：左栏只给廉价元数据，打开它才在后台建账（不自动建旧对话）'
+          : o ? ('模型层写过：块综述 ' + o.sums + ' 条有效'
           + (o.sumsDropped ? '（另有 ' + o.sumsDropped + ' 条锚点已失效）' : '')
           + '、任务题名 ' + o.titles + ' 条、阶段 ' + o.phases + ' 段、已证增量 ' + o.verified + ' 条'
           + (o.at ? ' · 最后一次写于 ' + o.at.slice(0, 16).replace('T', ' ') : '')
           + '\n判据与 convledger outstanding 同一条：hash 对不上的旧条目不算整理过') : '这一本的账读不出模型层';
         lt.appendChild(chip);
         a.appendChild(lt);
-        a.appendChild(el('span', 'goto', '进入画布 →'));
+        a.appendChild(el('span', 'goto', unbuilt ? '打开并建账 →' : '进入画布 →'));
         box.appendChild(a);
       });
       if (!expanded && rows.length > shownRows.length) {

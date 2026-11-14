@@ -6,31 +6,55 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { spawn } from 'node:child_process';
+import readline from 'node:readline';
 import { build, RULE_AUTHOR } from './build.mjs';
+import { indexWindowed, rawRecords, SLICE_BYTES } from './window.mjs';
 import { listSessions } from './project.mjs';
-import { libraryOf, RUNNER_LABEL } from './library.mjs';
-import { writeStore, loadLedger, resolveSegments, renderBody, searchLedger, storeDir, trace, readTrace, checkAnchor, archiveState, syncArchive, effectiveSource } from './store.mjs';
+import { libraryOf, findSession, RUNNER_LABEL } from './library.mjs';
+import { writeStore, loadLedger, resolveSegments, renderBody, searchLedger, storeDir, trace, readTrace, checkAnchor, anchorChecker, archiveState, syncArchive, effectiveSource } from './store.mjs';
 import { proveInput, renderProve, materials, validateClaim, norm } from './claims.mjs';
 import { readTopics, writeTopics, validateLabel, publishedTopics, BRANCH_STATES } from './topics.mjs';
 import { readView, clip } from './view.mjs';
-import { briefText, phaseDetailText, chapterDetailText, handoffText } from './brief.mjs';
+import { briefText, briefScenes, briefContext, phaseDetailText, chapterDetailText, handoffText } from './brief.mjs';
 import { readNotes, readRequests, closeRequest } from './notes.mjs';
 import { blockHash, blockMaterial, readSummaries, taskMaterial, validateSummary, validateTaskTitle, writeSummaries } from './summaries.mjs';
 import { allMaterial, readPhases, validatePhase, validatePhases, writePhases, applyPhases, maxPhaseTo } from './phases.mjs';
 import { readChapters, writeChapters, validateChapter, validateChapters, applyChapters, chapterDigest, suggestRanges } from './chapters.mjs';
 import { scanDocs } from './docs.mjs';
 import { serveMap, probeHub, hubFile } from './map.mjs';
-import { hostRows, nodeFacts, portState, storeWritable, runNode, smoke, buildRecent, writeShortcuts, removeShortcuts, writeDesktopEntry, removeDesktopEntry, copyText, openUrl, ensureHub } from './setup.mjs';
+import { hostRows, nodeFacts, portState, storeWritable, runNode, smoke, buildRecent, writeShortcuts, removeShortcuts, writeDesktopEntry, removeDesktopEntry, copyText, openUrl, openAppWindow, ensureHub, ensureHubAuto } from './setup.mjs';
+import { readInternal, setWorker, addInternal, clearWorker, getWorker } from './internal.mjs';
+import { connectionState, isOff, onlySharedLeft, turnOff, turnOn } from './connection.mjs';
+import { capsTable, capsFile } from './host-caps.mjs';
 import { outstandingFor } from './outstanding.mjs';
 import { lessonsOf } from './lessons.mjs';
 import { resolveCurrent, resolveWriteTarget } from './current.mjs';
-import { projectsOf } from './projects.mjs';
+import { projectsOf, projectKey } from './projects.mjs';
 import { projectView, applyBatch, STATUS_LABEL, transitionCandidate } from './progress.mjs';
 import { readState, commitBatch, sha256, readPrepared, writePrepared, dropPrepared, updateState, projectBriefLine } from './state-io.mjs';
 import { prepareBatch, verifyPrepared, associateBatch, mergePending, readPending, writePending, byteOffsetOfLine } from './sync.mjs';
-import { MEMORY_CLASSES, memoryRead, digestMaterials, digestUserMaterials, resolveProject, putProjectMemories, putUserMemories, promoteEntry, unpromoteEntry, userContext, memoryContext, applyFreshness, publishCandidates } from './memories.mjs';
-import { writeProjectExports, globalIndexFile, checkExports, lastRunFile, prunePreview, exportPaths, snapshotNames, KEEP_SNAPSHOTS } from './export.mjs';
+import { MEMORY_CLASSES, memoryRead, digestMaterials, digestUserMaterials, resolveProject, putProjectMemories, putUserMemories, promoteEntry, unpromoteEntry, userContext, memoryContext, applyFreshness, publishCandidates, forgetUserEntry, collabBrief } from './memories.mjs';
+import { writeProjectExports, globalIndexFile, checkExports, lastRunFile, prunePreview, exportPaths, snapshotNames, KEEP_SNAPSHOTS, migrateLegacyExports } from './export.mjs';
+import { usageReport, usageLines } from './usage.mjs';
+import { runUpgrade, upgradeLines, clearPaused } from './upgrade.mjs';
 import { tok, num, kb } from './lib.mjs';
+import { readPrefs, writePrefs, resolvePrefs, writeSessionPrefs, HOST_DEFAULTS, CADENCE_LABELS, CLOSEOUT_LABELS, SUMMARY_CADENCES, CLOSEOUT_CADENCES } from './prefs.mjs';
+import { doctor, describeHost } from './host-doctor.mjs';
+import { readLlm, writeLlm, clearLlm, maskKey, probeEndpoints, detectBridge, pickModel, testLlm, KNOWN_ENDPOINTS, saveKeyEntry, listSavedKeys, useSavedKey, removeSavedKey, ensureActiveSaved } from './llm.mjs';
+import { runAuto, tryLock, unlock } from './closeout-auto.mjs';
+
+/** 启动前顺手清一次宿主残留（崩溃后留下的无窗口进程树）。清到了才说一句，没清就闭嘴——
+ *  不能让每次点图标都多一行没人要的输出。判定见 src/host-doctor.mjs（有窗口的绝不动）。 */
+function sweepHostStray(out) {
+  try {
+    const r = doctor({ purge: true });
+    if (!r.ok) return;
+    const killed = r.hosts.reduce((n, h) => n + h.killed.length, 0);
+    if (!killed) return;
+    const bytes = r.hosts.reduce((s, h) => s + describeHost(h).strayMem, 0);
+    out(`· 顺手清了 ${killed} 个宿主残留进程（崩溃留下的无窗口实例，回收约 ${(bytes / 1024 / 1024).toFixed(0)} MB）\n`);
+  } catch { /* 清理失败不影响启动 */ }
+}
 import { BODY_BUDGET_TOKENS, MIN_SEGMENTS_PER_TOPIC, SUMMARY_SHORT_W, SUMMARY_TITLE_MAX, SUMMARY_SAID_MAX, SUMMARY_ANSWERED_MAX, SUMMARY_DONE_MAX, SUMMARY_NEED_MAX, SUMMARY_LESSON_MAX, PHASE_SHORT_W, PHASE_DOING_MAX, PHASE_STATE_MAX, PHASE_EFFECT_MAX, PHASE_PLAN_MAX, PHASE_TRACK_MAX, CHAP_MIN_PHASES, MEMORY_DIGEST_TOKENS } from './cost.mjs';
 
 const TOOL_ROOT = new URL('..', import.meta.url).pathname.replace(/^\/(\w:)/, '$1').replace(/\/$/, '');
@@ -42,7 +66,7 @@ const DEFAULT_STORE = (TOOL_ROOT + '/out/store').replace(/\\/g, '/');
 process.stdout.on('error', (e) => { if (e.code !== 'EPIPE') throw e; });
 
 // 无值旗标：给了就是 true，绝不去吞后面那个 token。
-const BOOL_FLAGS = new Set(['full', 'text', 'reset', 'json', 'all', 'missing', 'tasks', 'pending', 'phases', 'digest', 'help', 'open', 'serve', 'stop', 'force', 'list', 'check', 'prepare', 'status', 'retry', 'no-hooks', 'no-shortcut', 'no-open', 'copy', 'uninstall']);
+const BOOL_FLAGS = new Set(['full', 'text', 'reset', 'json', 'all', 'missing', 'tasks', 'pending', 'phases', 'digest', 'help', 'open', 'serve', 'stop', 'force', 'list', 'check', 'prepare', 'status', 'retry', 'no-hooks', 'no-shortcut', 'no-open', 'no-hub', 'hub', 'choose', 'copy', 'uninstall', 'keep-hub', 'migrate-legacy', 'dry-run', 'refresh', 'purge', 'bridge', 'test', 'clear', 'auto']);
 
 function parseArgs(argv) {
   // 命令不一定是 argv[0]：`convledger --help`、`convledger --store DIR steps` 开头是旗标。
@@ -67,15 +91,24 @@ function parseArgs(argv) {
 
 const usage = () => `convledger — 会话结构账本（派生优先：只存账本与锚点，正文回源读）
 
-  convledger index <session.jsonl|session-dir> [--store DIR]   建账本（幂等，可增量重建）
+  convledger index <session.jsonl|session-dir> [--store DIR]   人工全量建账本（幂等）；自动接入一律走按片建账，不整段全建
   convledger index --all [--project P] [--limit N]              批量索引全部可见会话（只出统计）
+  convledger raw <会话前缀> [--from BYTE] [--limit N]            只读展示更早、还没建账的原始记录（不生成段/卡）
+  convledger catchup <会话前缀>                                  手动往前补一片（${Math.round(SLICE_BYTES / 1024)}KB 上限），追平即止
   convledger sessions [--all|--json]                           已建账 / 还没建账的会话：一行一本，带「整理过没有」；--all 全量，--json 含源路径
+  convledger prefs [--summary each|every5|compact] [--closeout each|every5|compact] [--profile auto|off] [--host 宿主] [--session 前缀]
+                                                              综述/收尾分开两档：会话级>Agent级>机器级；给 --host/--session 在该层设置（值 reset 回上层）
+  convledger llm [--key <key> | --bridge | --base-url <url>] [--model M] [--test] [--on|--off] [--clear] [--keys] [--use <id>] [--forget <id>]
+                                                              接模型后端（给补账用）：只给一个 key 就够——工具自己认出是哪家、端点在哪、有哪些模型；--bridge 直接读本机 OW Bridge；--base-url 接任意 OpenAI 兼容网关；--test 发一条最短请求验通不通
+  convledger closeout --auto [--session 前缀] [--max N]        后台补账循环：接了模型就由它静默补完全部欠项（块综述/收尾任务/阶段/记忆/画像；每轮一小批、闸门照过、写结果文件）；没接模型会明确拒绝。宿主 hook 检测到已接模型时不再向当前 Agent 派任何补账活
+  convledger doctor [--purge]                                  体检宿主进程：每套实例一行（保留·有窗口 / 残留·无窗口）；--purge 清掉崩溃留下的僵尸树（只清无窗口且启动超 90 秒的）
   convledger projects [--json] [--all]                          项目层：同一 cwd 的会话归一组（默认列全部项目；--all 附未归组与每个项目的会话 id）
   convledger memory [--project <键|名字>] [--json] [--all]       记忆六段：现在到哪（工具复算）＋ 进度/经验/规则/探索（项目）＋ 画像（用户表，跨项目带来源；失效默认剔除，--all 显示原因）
   convledger memory --digest [--class 进度|画像|经验|规则|探索] [--all] [--max N]
                                                              写记忆的素材：阶段/块原话/已证增量/待办请求（默认最近 8 会话，${MEMORY_DIGEST_TOKENS} tok 硬顶，超了整段丢最旧；--class 画像 跨全部项目取材）
   convledger memory --put <file|-> [--scope project|user]      写记忆（G0–G9 全过才落盘；先按当前源重建再核锚点；user 只写画像）
   convledger memory --promote M03 | --unpromote U01            晋升：≥2 个项目里的等价规则合成用户表副本（G8）/ 撤销并回填 promoted_to
+  convledger memory --forget U20                               从用户表删一条（合并重复画像时用；项目表不删）
   convledger show                                              路由表：所有段的一行索引（1 次调用）
   convledger card S07[,S08]                                    路由卡全文
   convledger body S07[,S08-S11|all] [--text|--full] [--max N] [--after LINE]
@@ -110,12 +143,20 @@ const usage = () => `convledger — 会话结构账本（派生优先：只存�
   convledger trace [--reset]                                   本会话的数据访问审计（回补次数）
   convledger map [--port N] [--rebuild SEC] [--open]            确保 hub 在跑，给出本会话画布地址 /s/<id>/（--open 用系统浏览器打开）
   convledger map --stop                                        停掉这个 hub（固定 8765；所有会话共用它）
+  convledger internal [--json] [--host <名>] [--set <id>] [--add <id>] [--clear]  后台工作会话：每家宿主各一段、复用不新开；已登记的从会话库/画像统计里隐藏
+  convledger app                                               确保 hub 在跑，用专属应用窗口打开本机看板 /app（Edge/Chrome --app；没有就退回浏览器）
   convledger url [--copy]                                      确保 hub 在跑，打印会话库地址（--copy 复制到剪贴板）
   convledger outstanding [--json]                              链路自检：还缺哪些综述/题名/阶段/候选/请求
   convledger lessons [--limit N] [--json]                      可复用经验：已写 lesson 的块（新→旧）
-  convledger setup [--check] [--build N] [--all] [--no-hooks] [--no-shortcut] [--no-open] [--uninstall]
-                                                              新设备一键适配：找宿主、装 Skill/hooks、建最近 20 段账、建快捷方式、起 hub；--uninstall 只撤自己写的东西
-  convledger export [--project] [--all] [--list] [--force]     把项目进度/用户画像写进 <项目>/convledger-export/（内容变了才存快照，留 30 份）
+  convledger caps [--json]                                    宿主接入状态权威表：每家的通道、已验证/部分验证/未实测、还差哪段没取证、工具名出处；--json 含 status/gaps/证据/警告；改 out/host-caps.json 即可覆盖
+  convledger setup [--client <id|all>] [--choose] [--hub] [--check] [--build N] [--all] [--no-hooks] [--no-shortcut] [--no-open] [--no-hub] [--uninstall]
+                                                              新设备一键适配：找宿主、装 Skill/hooks、只建当前这一段账、建快捷方式、起 hub（历史一段都不建，打开哪段建哪段；要历史加 --build N 或 --all）；--no-hub 只装不起服务（测试隔离/不想常驻时用）；--uninstall 只撤自己写的东西
+  convledger status                                             连接状态分层：hooks 每家几条 · Skill 每家挂没挂（含 Junction 指向）· hub · 桌面入口 · 账本
+  convledger off [--all] [--keep-hub]                           断开：撤 hooks 与 Skill、停 hub；账本与历史原样留着；--all 连桌面入口一起撤
+  convledger on                                                 接上：按检测到的宿主把 hooks 与 Skill 装回去（hub 不自动起）
+  convledger export [--project] [--all] [--list] [--force]     把项目进度/用户画像写进工具目录 out/exports/projects/（内容变了才存快照，留 30 份；--migrate-legacy 把旧的项目内 convledger-export/ 搬过来）
+  convledger usage [--json] [--refresh]                         五家宿主的 token/credits 用量：总量、每会话、账本注入与回读（宿主没上报就写未上报；--refresh 忽略缓存重扫）
+  convledger upgrade [--check] [--port N] [--json]              代码更新后把本机工具同步到最新：五家 Skill 副本、常驻 hub 重启、版本水位；--check 只报告不同步项
   convledger progress --project <键|名字> [--task PT001] [--json]   项目任务进度（只读；未整理时如实说「没有」）
   convledger sync --prepare --project <键> --session <ID>      冻结增量素材与批次身份（不写状态、不推进游标）
   convledger sync --put <文件|-> --project <键> --session <ID>  校验并提交任务/事件/候选（分层回执）
@@ -123,7 +164,9 @@ const usage = () => `convledger — 会话结构账本（派生优先：只存�
   convledger sync --retry --project <键>                       重试 outbox 里待发布的记忆（只做机械步骤，不越过闸门）
   convledger sync --dismiss C001 --project <键> [--why 原因]   把失败候选标成 dismissed，相关 outbox 收口
 
-  通用：--session <ID前缀>  --store <DIR>`;
+  通用：--session <ID前缀>  --store <DIR>
+
+  制作人：再来一杯海星酒 · GitHub zhl110 · https://github.com/zhl110/convledger`;
 
 const BACKFILL = new Set(['body', 'lines', 'find', 'prove']);
 
@@ -169,6 +212,249 @@ function main() {
     return die(1, `未知命令 ${cmd}${near.length ? `（想跑的是：${near.join(' / ')}）` : ''}\n全部用法：convledger help\n`, out);
   }
 
+  // 长历史按片建账的只读/补片命令（RULES §13）。raw 只读更早的原始记录，不解析成段。
+  if (cmd === 'raw' || cmd === 'catchup') {
+    const spec = pos[0] || flags.session;
+    if (!spec) return fail(`需要会话前缀（${cmd} <前缀>）`);
+    const id = findSession(root, spec);
+    if (!id) return fail(`没有会话 ${spec}；先看 convledger sessions`);
+    const { ledger } = loadLedger(root, id);
+    const src = String(ledger.sourceFile ?? '');
+    if (!src || !fs.existsSync(src)) return fail(`会话 ${id.slice(0, 8)} 的源已不在：${src || '(未记)'}`);
+    if (cmd === 'catchup') {
+      const r = indexWindowed(src, { storeRoot: root, grow: true });
+      const w = r.window;
+      return out(r.action === 'done'
+        ? `已追平：${id.slice(0, 8)} 共 ${r.segs} 段，不再补片。\n`
+        : `${r.action === 'first' ? '首片' : r.action === 'grow' ? '往前补一片' : '重建尾部一片'}：${id.slice(0, 8)} 共 ${r.segs} 段` +
+          ` · 本轮解析 ${num(r.parsedBytes ?? 0)}B（上限 ${num(SLICE_BYTES)}B）` +
+          (w ? ` · 已建到 ${num(w.coveredFromByte ?? 0)}B${w.complete ? '（追平）' : ''}` : '') + '\n');
+    }
+    const r = rawRecords(src, ledger, {
+      fromByte: flags.from == null ? null : +flags.from,
+      maxLines: +(flags.limit ?? 40),
+    });
+    out(`${id} · 只读原始记录（更早、还没建账的部分）· 源 ${num(r.totalBytes)}B · 已建到 ${num(r.coveredFromByte)}B${r.complete ? '（已追平）' : ''}`);
+    out(`区间 ${num(r.fromByte)}–${num(r.toByte)}B，以下按行原文，不生成段/卡/索引：\n`);
+    for (const l of r.lines) out(`L${l.line} ${l.text}`);
+    out(`\n下一片：convledger catchup ${id.slice(0, 8)}　｜　再往前翻：convledger raw ${id.slice(0, 8)} --from ${Math.max(0, r.fromByte - 65536)}`);
+    return;
+  }
+
+  if (cmd === 'doctor') {
+    // 宿主崩溃后可能留下「没有窗口却占几 G」的僵尸进程树（判定规则见 src/host-doctor.mjs）。
+    const r = doctor({ purge: !!flags.purge });
+    if (!r.ok) return fail(r.reason + '\n');
+    let total = 0;
+    for (const h of r.hosts) {
+      const d = describeHost(h);
+      out(`${d.exe}：${h.found ? `${h.found} 个进程` : '没在跑'}\n`);
+      for (const l of d.lines) out(`${l}\n`);
+      if (h.stray.length) {
+        total += d.strayMem;
+        const mb = (d.strayMem / 1024 / 1024).toFixed(0);
+        if (flags.purge) {
+          out(`  ${h.killed.length ? `已清 ${h.killed.length} 个进程` : '没清掉任何进程'}`
+            + `${h.failed.length ? `，${h.failed.length} 个杀不掉（权限不足？）` : ''}\n`);
+        } else {
+          out(`  ${h.stray.length} 套残留，占 ${mb} MB —— 加 --purge 清掉\n`);
+        }
+      } else {
+        out('  没有残留\n');
+      }
+    }
+    if (!r.hosts.some((h) => h.found)) out('· 没有任何宿主在跑（不需要清理）\n');
+    else if (total && !flags.purge) out(`合计可回收 ${(total / 1024 / 1024).toFixed(0)} MB\n`);
+    return;
+  }
+
+  if (cmd === 'llm') {
+    // main() 不是 async；这里 fire-and-forget，跟 map/app 用 promise 同一个模式。
+    void (async () => {
+    // 只给一个 key，剩下的自己认：先试本机转接器，再试主流云；任意 OpenAI 兼容网关走 --base-url。
+    if (flags.clear) {
+      const had = readLlm(root).configured;
+      clearLlm(root);
+      return out(had
+        ? '· 已断开当前连接；贴过的 key 留在钥匙串里（--keys 看，--use <id> 换回来）\n'
+        : '· 本来就没接模型，没什么可清的\n');
+    }
+    // 钥匙串：贴过的 key 记本机，换端不重贴（2026-11-14 用户要求）
+    if (flags.keys || flags.use || flags.forget) {
+      ensureActiveSaved(root);
+      if (flags.use) {
+        try {
+          const c = useSavedKey(root, String(flags.use));
+          out(`✓ 已切到 ${c.model ?? '（未选模型）'}（${c.baseURL}）\n  key ${maskKey(c.apiKey)}\n`);
+        } catch (e) { return fail(`✗ ${e?.message ?? e}\n`); }
+      }
+      if (flags.forget) {
+        try {
+          const gone = removeSavedKey(root, String(flags.forget));
+          out(gone ? '· 已从钥匙串删掉\n' : `· 钥匙串里没有 ${flags.forget} 这条\n`);
+        } catch (e) { return fail(`✗ ${e?.message ?? e}\n`); }
+      }
+      const ring = listSavedKeys(root);
+      if (!ring.length) out('· 钥匙串是空的：贴过的 key 会记在这里，换端不用重贴\n');
+      else {
+        out(`钥匙串 ${ring.length} 条（明文只在本机 llm.json，列表一律脱敏）：\n`);
+        for (const k of ring) {
+          out(`${k.inUse ? '→' : '·'} ${k.id}  ${k.label || k.provider || '自定义端点'}  ${k.keyMasked}  ${k.model ?? '（未选模型）'}${k.inUse ? '（使用中）' : ''}\n`);
+        }
+      }
+      return;
+    }
+    if (flags.on || flags.off) {
+      if (flags.on && !readLlm(root).configured) return fail('✗ 还没接模型——先 --key 接上，再开自动补账\n');
+      const cur = setEnabled(root, !!flags.on);
+      return out(`· 补账总闸：${flags.on ? '开' : '关'}\n  开＝接了模型由后台静默补（没接则由当前 Agent 补）；关＝后台模型与当前 Agent 都不再补综述，欠项留着（画布回落原话截断）\n  key ${maskKey(cur.apiKey)} 保留不动；正在跑的后台循环本轮收手\n`);
+    }
+    const wantKey = flags.key ? String(flags.key) : null;
+    const wantBase = flags['base-url'] ? String(flags['base-url']).replace(/\/$/, '') : null;
+    const wantModel = flags.model ? String(flags.model) : null;
+
+    if (flags.bridge || wantKey || wantBase) {
+      let cfg = null;
+      if (!wantKey && !wantBase) {
+        const b = await detectBridge();
+        if (!b.ok) return fail(`✗ OW Bridge 没接上：${b.reason}\n`);
+        cfg = { baseURL: b.baseURL, apiKey: b.apiKey, models: b.models, provider: 'ow-bridge', label: b.label };
+      } else if (!wantKey) {
+        return fail('✗ 给了 --base-url 还得给 --key（想自动读本机的用 --bridge）\n');
+      } else if (wantBase) {
+        const probe = await probeEndpoints(wantKey, { endpoints: [{ id: 'custom', label: wantBase, baseURL: wantBase }] });
+        if (!probe.hit) return fail(`✗ ${wantBase} 没通过：${probe.tried[0]?.reason ?? '未知原因'}\n`);
+        cfg = { baseURL: wantBase, apiKey: wantKey, models: probe.hit.models, provider: 'custom', label: wantBase };
+      } else {
+        out(`· 拿这个 key 试 ${KNOWN_ENDPOINTS.length} 个候选端点…\n`);
+        const probe = await probeEndpoints(wantKey);
+        if (!probe.hit) {
+          out('✗ 没有一个端点认这个 key。试过的：\n');
+          for (const t of probe.tried) out(`  · ${t.label}：${t.reason ?? '不通'}\n`);
+          process.exitCode = 1;
+          return;
+        }
+        cfg = { baseURL: probe.hit.baseURL, apiKey: wantKey, models: probe.hit.models, provider: probe.hit.id, label: probe.hit.label };
+      }
+      const model = wantModel ?? pickModel(cfg.models);
+      if (!model) return fail(`✗ ${cfg.label} 没返回任何模型，用 --model 指定一个\n`);
+      const saved = writeLlm(root, { baseURL: cfg.baseURL, apiKey: cfg.apiKey, model, provider: cfg.provider, models: cfg.models });
+      saveKeyEntry(root, { apiKey: cfg.apiKey, baseURL: cfg.baseURL, provider: cfg.provider, label: cfg.label, model, models: cfg.models });
+      out(`✓ 已接 ${cfg.label}\n`);
+      out(`  端点：${saved.baseURL}\n  模型：${saved.model}（共 ${cfg.models.length} 个可用）\n  key：${maskKey(saved.apiKey)}（已记进钥匙串，下次换回来不用重贴）\n`);
+      const other = cfg.models.filter((m) => m !== model).slice(0, 5);
+      if (other.length) out(`  其它可选：${other.join('、')}${cfg.models.length > 6 ? ' …' : ''}\n`);
+      if (!flags.test) return;
+    }
+
+    const cur = readLlm(root);
+    if (!cur.configured) {
+      out('· 还没接模型。三条路任挑一条：\n');
+      out('  convledger llm --key <你的 API key>          # 只给 key，自己认是哪家\n');
+      out('  convledger llm --bridge                     # 用本机 OW Bridge 的 key\n');
+      out('  convledger llm --key <key> --base-url <url> # 任意 OpenAI 兼容网关\n');
+      return;
+    }
+    if (flags.test) {
+      out(`· 试一条最短请求 → ${cur.baseURL} · ${cur.model}\n`);
+      try {
+        const r = await testLlm(cur);
+        out(`✓ 通了（${r.ms}ms）：${r.reply || '（空回复）'}\n`);
+        if (r.usage) out(`  token：输入 ${r.usage.prompt_tokens ?? '?'} · 输出 ${r.usage.completion_tokens ?? '?'}\n`);
+      } catch (e) {
+        return fail(`✗ ${e?.message ?? e}\n`);
+      }
+      return;
+    }
+    out(`端点：${cur.baseURL}\n`);
+    out(`模型：${cur.model ?? '（未选）'}\n`);
+    out(`key：${maskKey(cur.apiKey)}（来源 ${cur.source === 'env' ? '环境变量' : 'llm.json'}）\n`);
+    out(`提供方：${cur.provider ?? '自定义'}${cur.updatedAt ? ` · 配置于 ${cur.updatedAt}` : ''}\n`);
+    if (Array.isArray(cur.models) && cur.models.length) out(`可选模型：${cur.models.length} 个\n`);
+    const ring = listSavedKeys(root);
+    if (ring.length) {
+      out(`钥匙串：${ring.length} 条（--keys 看明细，--use <id> 换端不重贴）\n`);
+      for (const k of ring) out(`  ${k.inUse ? '→' : '·'} ${k.id}  ${k.label || k.provider || '自定义端点'}  ${k.keyMasked}${k.inUse ? '（使用中）' : ''}\n`);
+    }
+    })();
+    return;
+  }
+
+  if (cmd === 'closeout') {
+    // 后台补账循环：接了模型后端就由它静默补，没接则提示走老路（hook 会给 Agent 派活）。
+    void (async () => {
+      const cur = resolveCurrent({ root, cwd: process.cwd(), preferred: flags.session });
+      if (cur.error) return fail(cur.error);
+      const lock = tryLock(root, cur.sessionId);
+      if (!lock) return fail('✗ 这个会话已经有一份后台补账在跑（10 分钟内自动过期；别同时开两份）\n');
+      try {
+        const max = flags.max ? Number(flags.max) : 30;
+        const r = await runAuto(root, { sessionId: cur.sessionId, cwd: cur.cwd, max, say: (m) => out(m + '\n') });
+        const st = r.stages ?? {};
+        const detail = Object.entries(st).filter(([, n]) => n > 0).map(([k, n]) => `${k} ${n}`).join(' · ');
+        if (r.done) {
+          out(`✓ 补账完成：${r.rounds} 轮写入 ${r.written} 项${detail ? `（${detail}）` : ''}，欠项已追平\n`);
+        } else {
+          out(`· ${r.rounds} 轮写入 ${r.written} 项${detail ? `（${detail}）` : ''}${r.failures.length ? `，${r.failures.length} 个失败` : ''}，还没追平\n`);
+          for (const f of r.failures) out(`  ✗ ${f}\n`);
+          for (const s of r.skipped ?? []) out(`  · ${s}\n`);
+          out('  再跑一次 convledger closeout --auto 会接着往前补\n');
+        }
+        if (r.failures.length) process.exitCode = 1;
+      } catch (e) {
+        return fail(`✗ ${e?.message ?? e}\n`);
+      } finally { unlock(root, cur.sessionId); }
+    })();
+    return;
+  }
+
+  if (cmd === 'prefs') {
+    // 档位分三层：机器级(prefs.json) / Agent 级(prefs.json 的 hosts) / 会话级(store/<id>/session-prefs.json)。
+    // 解析顺序：会话 > Agent > 机器；不再有内置宿主默认。见 src/prefs.mjs。
+    // 综述与收尾各一份档位：summaryCadence 数缺块，closeoutCadence 数真人回合。
+    const val = (k) => (flags[k] === undefined ? undefined : String(flags[k]));
+    const norm = (v) => (v === 'reset' || v === 'inherit' ? null : v);
+    const patch = {};
+    if (val('summary') !== undefined) patch.summaryCadence = norm(val('summary'));
+    if (val('closeout') !== undefined) patch.closeoutCadence = norm(val('closeout'));
+    if (val('profile') !== undefined) patch.profileCadence = norm(val('profile'));
+    const runnerOf = (sid) => { try { return JSON.parse(fs.readFileSync(path.join(storeDir(root, sid), 'ledger.json'), 'utf8')).runner ?? null; } catch { return null; } };
+
+    if (flags.session) {
+      const cur = resolveCurrent({ root, cwd: process.cwd(), preferred: flags.session });
+      if (cur.error) return fail(cur.error);
+      if (Object.keys(patch).length) {
+        try { writeSessionPrefs(root, cur.sessionId, patch); } catch (e) { return fail(String(e?.message ?? e)); }
+      }
+      const eff = resolvePrefs(root, { runner: runnerOf(cur.sessionId), sessionId: cur.sessionId });
+      out(`会话 ${cur.sessionId.slice(0, 8)} 有效档位：收尾 ${CLOSEOUT_LABELS[eff.closeoutCadence]}（来源 ${eff.sources.closeoutCadence}）· 综述 ${CADENCE_LABELS[eff.summaryCadence]}（来源 ${eff.sources.summaryCadence}）· 画像 ${eff.profileCadence}（来源 ${eff.sources.profileCadence}）\n`);
+      return;
+    }
+    if (flags.host) {
+      const h = {};
+      if (patch.summaryCadence !== undefined) h.summaryCadence = patch.summaryCadence;
+      if (patch.closeoutCadence !== undefined) h.closeoutCadence = patch.closeoutCadence;
+      if (patch.profileCadence !== undefined) h.profileCadence = patch.profileCadence;
+      if (!Object.keys(h).length) return fail('--host 还要给 --summary / --closeout / --profile（值 reset 表示回到内置默认）');
+      try { writePrefs(root, { host: { [flags.host]: h } }); } catch (e) { return fail(String(e?.message ?? e)); }
+      out(`已设 Agent「${flags.host}」覆盖：${JSON.stringify(h)}\n`);
+      return;
+    }
+    if (patch.summaryCadence !== undefined || patch.closeoutCadence !== undefined || patch.profileCadence !== undefined) {
+      const m = {};
+      if (patch.summaryCadence !== undefined) m.summaryCadence = patch.summaryCadence === null ? 'each' : patch.summaryCadence;
+      if (patch.closeoutCadence !== undefined) m.closeoutCadence = patch.closeoutCadence === null ? 'each' : patch.closeoutCadence;
+      if (patch.profileCadence !== undefined) m.profileCadence = patch.profileCadence === null ? 'auto' : patch.profileCadence;
+      try { writePrefs(root, m); } catch (e) { return fail(String(e?.message ?? e)); }
+    }
+    const pm = readPrefs(root);
+    out(`机器级：收尾 ${CLOSEOUT_LABELS[pm.closeoutCadence]} · 综述 ${CADENCE_LABELS[pm.summaryCadence]} · 画像 ${pm.profileCadence} · 自动建账 ${pm.autoBuild}\n`);
+    out(`内置宿主默认：${Object.keys(HOST_DEFAULTS).length ? JSON.stringify(HOST_DEFAULTS) : '（无）'}\n`);
+    if (Object.keys(pm.hosts ?? {}).length) out(`Agent 级覆盖：${JSON.stringify(pm.hosts)}\n`);
+    out(`改法：prefs --closeout <${CLOSEOUT_CADENCES.join('|')}> --summary <${SUMMARY_CADENCES.join('|')}> ｜ --host <宿主> --closeout <…|reset> ｜ --session <前缀> --closeout <…|reset>\n`);
+    return;
+  }
+
   if (cmd === 'index') {
     if (flags.all) return indexAll(root, flags, out);
     if (!pos[0]) return fail('需要 session.jsonl 或 session 目录');
@@ -198,8 +484,9 @@ function main() {
     // 一台机器上可能有两百多本账：默认档只给「挑哪一本」要的那几行，
     // 全量走 --all（纯文本逐行），结构化走 --json（含源路径）。中文键的 JSON 两头不靠，去掉。
     const lib = libraryOf(root);
+    const internalSet = new Set(Object.keys(readInternal(root).sids));
     const rows = lib.groups.flatMap((g) => g.sessions);
-    const avail = listSessions().filter((s) => s.bytes > 20000);
+    const avail = listSessions().filter((s) => s.bytes > 20000 && !internalSet.has(s.sessionId));
     const have = new Set(rows.map((r) => r.id));
     const fresh = avail.filter((s) => !have.has(s.sessionId));
     if (flags.json) {
@@ -328,7 +615,7 @@ function main() {
   // 记忆：跨会话的第二层。读取与素材零模型；写只发生在 --put/--promote/--unpromote，
   // 先重建再核锚点，一条不过整批不写（与 claims / summaries / phases 同一纪律）。
   // 项目表收 进度/经验/规则/探索；用户表收 画像（模型写）与晋升来的 规则（G8/G9）。
-  // 记忆层写到项目里：<项目>/convledger-export/。源头仍是记忆表，这里只是派生 + 归档。
+  // 记忆层写到工具自己的目录：out/exports/projects/<项目名>--<项目键>/。源头仍是记忆表，这里只是派生 + 归档。
   if (cmd === 'export') {
     const pickProject = () => pickProjectFor(root, flags);
     if (flags.list) {
@@ -341,10 +628,19 @@ function main() {
       } catch { /* 还没有留痕 */ }
       return;
     }
+    if (flags['migrate-legacy']) {
+      const targets = flags.all ? projectsOf(root, { withSteps: false }).projects.filter((p) => p.root || p.cwd) : [pickProject()];
+      for (const p of targets) {
+        const r = migrateLegacyExports(root, p, { dryRun: !!flags['dry-run'] });
+        if (r.reason && r.moved === 0 && !r.dryRun) out(`- ${p.name}：${r.reason}\n`);
+        else out(`✓ ${p.name}：${r.dryRun ? '将搬运' : `搬走 ${r.moved} 个文件`} ${r.from} → ${r.to}\n`);
+      }
+      return;
+    }
     if (flags['dry-run']) {
       const targets = flags.all ? projectsOf(root, { withSteps: false }).projects.filter((p) => p.root || p.cwd) : [pickProject()];
       for (const p of targets) {
-        const dir = exportPaths(p.root || p.cwd).archive;
+        const dir = exportPaths(root, p).archive;
         const would = prunePreview(dir);
         out('dry-run · ' + p.name + '：合计保留 ' + KEEP_SNAPSHOTS + ' 份，现存 ' + snapshotNames(dir).length + ' 份，将删除 ' + would.length + ' 个' + (would.length ? '：' + would.join(', ') : '（无）') + '\n');
       }
@@ -361,8 +657,8 @@ function main() {
         const r = checkExports(root, p);
         out(`# ${p.name}（${p.key}）${r.error ? ` · ${r.error}` : ''}\n`);
         for (const x of r.items) {
-          const tag = x.status === 'fresh' ? '✓ 新鲜' : x.status === 'stale' ? '✗ 过期' : x.status === 'missing' ? '✗ 缺失' : '? 不是本工具生成的';
-          out(`  ${tag} ${path.basename(x.file)}${x.status === 'fresh' ? '' : `（现在 fp=${x.fp}${x.prevFp ? `，文件 fp=${x.prevFp}` : ''}；跑 convledger export）`}\n`);
+          const tag = x.status === 'fresh' ? '✓ 新鲜' : x.status === 'stale' ? '✗ 过期' : x.status === 'legacy' ? '↪ 旧位置' : x.status === 'missing' ? '✗ 缺失' : '? 不是本工具生成的';
+          out(`  ${tag} ${path.basename(x.file)}${x.status === 'fresh' ? '' : `（${x.note || `现在 fp=${x.fp}${x.prevFp ? `，文件 fp=${x.prevFp}` : ''}；跑 convledger export`}）`}\n`);
         }
         if (!r.ok) bad++;
       }
@@ -395,11 +691,11 @@ function main() {
 
   if (cmd === 'memory') {
     const pickProject = () => pickProjectFor(root, flags);
-    const writeIntents = ['put', 'promote', 'unpromote', 'export'].filter((k) => k in flags);
+    const writeIntents = ['put', 'promote', 'unpromote', 'forget', 'export'].filter((k) => k in flags);
     if (writeIntents.length > 1) return fail(`一次只做一件事：${writeIntents.map((k) => `--${k}`).join(' / ')} 不能同时给`);
 
     if ('export' in flags) {
-      return fail('memory --export 已取消（不做笔记软件导出）：导出改成项目里的 convledger-export/，用 convledger export 或 convledger export --all');
+      return fail('memory --export 已取消（不做笔记软件导出）：导出改成工具目录 out/exports/projects/，用 convledger export 或 convledger export --all');
     }
 
     // 记忆写入成功后刷新项目里的导出；失败只打一行，绝不让记忆写入失败。
@@ -438,6 +734,17 @@ function main() {
       out(`✓ 已撤销 ${r.uid} · promoted_to 回 null：${r.cleared.map((x) => `${x.name}:${x.id}`).join(' ') || '—'}\n`);
       const p = tryProject();
       if (p) refreshExports(p);
+      return;
+    }
+
+    if (flags.forget) {
+      const r = forgetUserEntry(root, flags.forget);
+      if (!r.ok) {
+        for (const e of r.errors) out(`✗ ${e}\n`);
+        process.exitCode = 1;
+        return out('未删除：没有写任何文件\n');
+      }
+      out(`✓ 已从用户表删除 ${r.removed.id}（${r.removed.topic}）· 剩 ${r.entries.length} 条\n`);
       return;
     }
 
@@ -502,8 +809,9 @@ function main() {
     const { ledger } = loadSession(root, flags, out);
     // 源被运行器清掉后，锚点对归档校验：没断，但「校的是归档」这件事必须写在行里
     const ef = effectiveSource(ledger);
+    const verify = anchorChecker(ledger, ef);
     const rows = ledger.segments.map((s) => {
-      const a = checkAnchor(ledger, s, ef);
+      const a = verify(s);
       return { id: s.id, anchor: s.anchor, ok: a.ok, hash: a.recorded, nowBytes: a.bytes, ...(a.archived ? { archived: true } : {}), ...(a.missing ? { missing: true } : {}) };
     });
     trace(root, ledger.sessionId, 'anchors', ef.archived ? { source: 'archive' } : {}, {});
@@ -521,6 +829,23 @@ function main() {
       同步于: st.syncedAt, 源: ledger.sourceFile,
       ...(st.bytes ? {} : { 说明: '源日志读不到，也没有既有归档——这段会话没有可归档的正文' }),
     });
+  }
+
+  // 用量：跨五家宿主的只读统计。不依赖当前会话，也不拿字符数估算冒充宿主计数；
+  // 宿主没上报 token 的来源如实写未上报（Qoder 只有 credits、Codex 本机没有 token_count）。
+  if (cmd === 'usage') {
+    const r = usageReport(root, { force: !!flags.refresh });
+    return out(flags.json ? r : usageLines(r) + '\n');
+  }
+
+  if (cmd === 'upgrade') {
+    const port0 = flags.port === undefined ? 8765 : +flags.port;
+    if (!Number.isInteger(port0) || port0 < 1024 || port0 > 65535) return fail(`--port 要是一个 1024-65535 的整数，收到 ${flags.port}`);
+    runUpgrade(TOOL_ROOT, { port: port0, store: root, checkOnly: !!flags.check }).then((r) => {
+      out(flags.json ? r : upgradeLines(r) + '\n');
+      if (!r.ok) process.exitCode = 1;
+    }).catch((e) => fail(`升级失败：${String(e?.message ?? e).split('\n')[0]}`));
+    return;
   }
 
   if (cmd === 'trace') {
@@ -550,6 +875,8 @@ function main() {
   // before touching the store.
   if (cmd === 'map') {
     const port0 = flags.port === undefined ? 8765 : +flags.port;
+    if (resumeHub()) out('· 已从「全局暂停」恢复（删掉 out/HUB-PAUSED）\n');
+    sweepHostStray(out);
     const rebuildSec = flags.rebuild === undefined ? 20 : +flags.rebuild;
     if (!Number.isInteger(port0) || port0 < 1024 || port0 > 65535) return fail(`--port 要是一个 1024-65535 的整数，收到 ${flags.port}`);
     if (!Number.isFinite(rebuildSec) || rebuildSec < 0) return fail(`--rebuild 要是一个不小于 0 的秒数（0 = 只服务不重建），收到 ${flags.rebuild}`);
@@ -577,7 +904,7 @@ function main() {
       serveMap({ root, port: port0, rebuildSec, pidFile: hubFile(root) })
         .then((h) => out(h.reused
           ? `hub 已经在 ${h.port} 上跑着（pid 记在 ${hubFile(root)}） · 没有另起第二个`
-          : `hub 起来了 → http://127.0.0.1:${h.port}/ · pid ${process.pid} · 所有会话共用这一个地址 · Ctrl-C 停`))
+          : `hub 起来了 · pid ${process.pid} · 门禁开启：页面要带 token，从桌面图标或 convledger app 进（浏览器直接访问 403）· 10 分钟无访问自动退 · Ctrl-C 停`))
         .catch((e) => fail(`起 hub 失败：${String(e?.message ?? e).split('\n')[0]}`));
       return;
     }
@@ -591,28 +918,18 @@ function main() {
       try { writeStore(root, build(cur.file, { storeRoot: root })); }
       catch (e) { return fail(`建账失败：${String(e?.message ?? e).split('\n')[0]}`); }
     }
-    const ensureHub = async () => {
-      const h = await probeHub(port0);
-      if (h) return { port: h.port ?? port0, reused: true };
-      const args = [process.argv[1], 'map', '--serve', '--port', String(port0), '--rebuild', String(rebuildSec)];
-      if (flags.store) args.push('--store', root);
-      // detached + unref：hub 不随调用它的 agent/终端退出。生命周期是 map --stop / 重启机器。
-      const child = spawn(process.execPath, args, { detached: true, stdio: 'ignore', windowsHide: true, cwd: TOOL_ROOT });
-      child.unref();
-      for (let i = 0; i < 40; i++) {
-        await new Promise((r) => setTimeout(r, 200));
-        const hh = await probeHub(port0, { tries: 1, timeout: 800 });
-        if (hh) return { port: hh.port ?? port0, reused: false };
-      }
-      throw new Error(`hub 没能在 ${port0} 上起来：端口可能被别的程序占着（先腾出来，或换 --port）`);
-    };
-    ensureHub().then(({ port, reused }) => {
-      const url = `http://127.0.0.1:${port}/s/${cur.sessionId}/`;
+    ensureHubAuto(root, port0, rebuildSec).then((hub) => {
+      if (!hub) return fail(`hub 没能在 ${port0} 上起来（端口都被占用或启动失败；可用 --port 指定）`);
+      const { port, reused, fallback, busyAt } = hub;
+      const url = `http://127.0.0.1:${port}/s/${cur.sessionId}/${hub.token ? `?k=${hub.token}` : ''}`;
       let led = {};
       try { led = JSON.parse(fs.readFileSync(path.join(dir, 'ledger.json'), 'utf8')); } catch { /* 横幅少几格 */ }
       const arc = archiveState(dir);
       const started = when(led.builtAt);
-      out(`${reused ? 'hub 复用' : 'hub 新起'} → ${url}`
+      const head = fallback
+        ? `首选端口 ${busyAt ?? port0} 被别的程序占用，临时端口 ${port}`
+        : (reused ? 'hub 复用' : 'hub 新起');
+      out(`${head} → ${url}`
         + ` · 会话 ${cur.sessionId.slice(0, 8)} · ${led.runner ?? cur.runner ?? '?'} · ${led.cwd ?? cur.cwd ?? '—'}`
         + `${started ? ` · 账本 ${started}` : ''} · ${(led.segments ?? []).length} 段 · 归档 ${kb(arc?.bytes ?? 0)}`
         + ` · 所有会话共用这一个 hub（/ 是会话库，左栏也能换） · 页面每 4s 重读${rebuildSec > 0 ? `，账本每 ${rebuildSec}s 按需重建` : '，账本不重建（--rebuild 0）'}`
@@ -622,17 +939,65 @@ function main() {
     return;
   }
 
+  if (cmd === 'app') {
+    const port0 = flags.port === undefined ? 8765 : +flags.port;
+    if (resumeHub()) out('· 已从「全局暂停」恢复（删掉 out/HUB-PAUSED）\n');
+    sweepHostStray(out);
+    ensureHubAuto(root, port0).then(async (hub) => {
+      if (!hub) return fail(`hub 没能在 ${port0} 上起来`);
+      if (!hub.token && hub.reused) return fail('在跑的 hub 是不带门禁的旧版：先跑 convledger map --stop，再 convledger app');
+      const u = `http://127.0.0.1:${hub.port}/app${hub.token ? `?k=${hub.token}` : ''}`;
+      if (hub.fallback) out(`· 首选端口 ${hub.busyAt ?? port0} 被别的程序占用，应用窗口开在临时端口 ${hub.port}（腾出后重跑 convledger app 可回到首选）\n`);
+      // 先把看板预取一遍再开窗：hub 刚起时事件循环可能被建账占着，窗口不能先开成白屏。
+      for (let i = 0; i < 40; i++) {
+        try {
+          const r = await fetch(u, { cache: 'no-store' });
+          if (r.ok && (await r.text()).includes('本机看板')) break;
+        } catch { /* 还没起来 */ }
+        await new Promise((res) => setTimeout(res, 200));
+      }
+      const r = openAppWindow(u);
+      out(r.pending
+        ? `· 已有一个启动进程正在打开应用窗口，不再开第二扇（${u}）\n`
+        : (r.app
+          ? (r.focused
+            ? `✓ 已聚焦现有应用窗口（${u}）\n`
+            : `✓ 应用窗口已打开：${u}\n  门禁已开：浏览器直接访问 403，只认这个应用窗；关窗后 hub 10 分钟自动退\n`)
+          : `· 没找到 Edge / Chrome，已用默认浏览器打开：${u}\n`));
+    }).catch((e) => fail(`打开应用窗口失败：${String(e?.message ?? e).split('\n')[0]}`));
+    return;
+  }
+
   if (cmd === 'url') {
     const port0 = flags.port === undefined ? 8765 : +flags.port;
-    ensureHub(root, port0).then((hub) => {
+    if (resumeHub()) out('· 已从「全局暂停」恢复（删掉 out/HUB-PAUSED）\n');
+    sweepHostStray(out);
+    ensureHubAuto(root, port0).then((hub) => {
       if (!hub) return fail(`hub 没能在 ${port0} 上起来`);
-      const u = `http://127.0.0.1:${hub.port}/`;
+      if (!hub.token && hub.reused) return fail('在跑的 hub 是不带门禁的旧版：先跑 convledger map --stop');
+      const u = `http://127.0.0.1:${hub.port}/${hub.token ? `?k=${hub.token}` : ''}`;
+      if (hub.fallback) out(`· 首选端口 ${hub.busyAt ?? port0} 被别的程序占用，临时端口 ${hub.port}\n`);
       out(`${u}\n`);
+      out('· 这个地址带门禁 token，等于钥匙：只在本机用，别外传（外发的图里也别带它）\n');
       if (flags.copy) {
         const c = copyText(`${u}\n`);
-        out(c.ok ? '✓ 已复制到剪贴板（会话库地址）\n' : `! 没复制成：${c.reason}\n`);
+        out(c.ok ? '✓ 已复制到剪贴板（带 token 的看板地址）\n' : `! 没复制成：${c.reason}\n`);
       }
     }).catch((e) => fail(`取地址失败：${String(e?.message ?? e).split('\n')[0]}`));
+    return;
+  }
+
+  if (cmd === 'internal') {
+    const host = flags.host ? String(flags.host) : 'default';
+    if (flags.clear) { clearWorker(root, host); return out(`✓ 已清空后台工作会话指针（${host}）`); }
+    if (flags.set !== undefined) { const sid = String(flags.set); if (!sid || sid === 'true') return fail('internal --set 要一个会话 id'); setWorker(root, sid, host); return out(`✓ 后台工作会话已设为 ${sid}（${host}）`); }
+    if (flags.add !== undefined) { const sid = String(flags.add); if (!sid || sid === 'true') return fail('internal --add 要一个会话 id'); addInternal(root, sid); return out(`✓ 已登记内部会话 ${sid}`); }
+    const r = readInternal(root);
+    if (flags.json) return out(JSON.stringify(r, null, 1));
+    const w = getWorker(root, host);
+    out(`后台工作会话（${host}）：${w || '（无）'}`);
+    const ids = Object.keys(r.sids);
+    out(`已隐藏的内部会话 ${ids.length} 段${ids.length ? '：' + ids.map((s) => s.slice(0, 8)).join(' ') : ''}`);
     return;
   }
 
@@ -656,7 +1021,7 @@ function main() {
     out(`链路欠项（会话 ${cur.sessionId.slice(0, 8)} · 项目 ${o.project ?? '—'}）：\n`);
     for (const x of o.items) out(`  - ${x}\n`);
     if (liveNote) out(liveNote);
-    out('补法：综述 digest --block N → summarise --put；题名 summarise --put；阶段 digest --phases → phases --put；章 chapters --digest → chapters --put；候选 memory；请求 requests --pending\n');
+    out('补法：综述 digest（不带 --block：一次拿全部缺块素材）→ 一次写成 {"blocks":[…]} → summarise --put；题名同一份 JSON 里带；阶段 digest --phases → phases --put；章 chapters --digest → chapters --put；候选 memory；请求 requests --pending\n');
     return;
   }
 
@@ -682,6 +1047,93 @@ function main() {
     return;
   }
 
+  // 连接是一个动作，断开也必须是同一个动作的反向——不是一个藏在脚本里的私旗标。
+  // off / on / status 三个命令共用一份分层视图：hooks（哪几家几条）· Skill（哪几家挂了、链接指向哪）· hub · 桌面入口 · 账本。
+  if (cmd === 'off' || cmd === 'on' || cmd === 'status') {
+    const stamp = () => new Date().toLocaleString('zh-CN', { hour12: false });
+    const put = (s = '') => out(String(s) + '\n');
+    const verdictOf = (s) => {
+      if (isOff(s)) return '已断开（宿主不会再调用 convledger；账本与历史原样留着）';
+      if (onlySharedLeft(s)) {
+        const sh = s.skills.filter((x) => x.mounted && x.shared).map((x) => `${x.client}（${x.sharedVia}）`).join('、');
+        return `已断开 hooks，但 ${sh} 挂在你自己的共享技能目录上——那是单源布局，工具不替你拆；要让这家也不读，改那层链接指向`;
+      }
+      return '仍连接（宿主会按 hooks/Skill 调用）';
+    };
+    const line = (s) => {
+      const hooks = s.hooks.map((h) => (h.id === 'opencode'
+        ? `OpenCode ${h.installed ? '插件在' : (h.parked ? '插件已停（.disabled）' : '无插件')}`
+        : `${h.label} ${h.count} 条`)).join(' · ');
+      const skills = s.skills.map((x) => `${x.client} ${x.mounted ? '已挂' : '未挂'}`).join(' · ');
+      const hub = s.hub.running ? `在跑（${s.hub.port}）` : (s.hub.state === 'busy' ? `端口被占用（${s.hub.port}）` : '未运行');
+      const shortcuts = s.shortcuts.filter((x) => x.exists).length;
+      const last = [s.last.lastOff, s.last.lastOn].filter(Boolean).sort((a, b) => Date.parse(b.at) - Date.parse(a.at))[0];
+      return [
+        `hooks      ${s.hooks.reduce((a, h) => a + (h.count || 0), 0)} 条　${hooks}`,
+        `Skill      ${s.skills.filter((x) => x.mounted).length} 家　${skills}`,
+        `hub        ${hub}`,
+        `桌面入口    ${shortcuts ? `${shortcuts} 个` : '无'}`,
+        `账本       ${s.ledger.sessions} 个会话　${s.ledger.dir}`,
+        last ? `上次操作    ${new Date(last.at).toLocaleString('zh-CN', { hour12: false })} ${s.last.lastOff && s.last.lastOn && Date.parse(s.last.lastOn.at) > Date.parse(s.last.lastOff.at) ? 'on' : 'off'}` : null,
+      ].filter(Boolean);
+    };
+    (async () => {
+      if (cmd === 'status') {
+        const s = await connectionState({ root });
+        put(`convledger status · ${stamp()}`);
+        put('');
+        for (const l of line(s)) put(l);
+        put('');
+        put(`判定：${verdictOf(s)}`);
+        for (const sk of s.skills.filter((x) => x.link)) put(`· ${sk.client} 是链接：${sk.link}`);
+        return;
+      }
+      const r = cmd === 'off'
+        ? await turnOff({ root, keepShortcut: !flags.all, keepHub: !!flags['keep-hub'] })
+        : turnOn({ root });
+      put(`convledger ${cmd} · ${stamp()}`);
+      put('');
+      for (const s of r.steps) {
+        const tail = (s.out || []).filter(Boolean).join(' · ');
+        put(`${s.ok ? '✓' : '✗'} ${String(s.layer).padEnd(6, '　')} ${tail || '（无输出）'}`);
+      }
+      const s = await connectionState({ root });
+      put('');
+      for (const l of line(s)) put(l);
+      put('');
+      put(`判定：${verdictOf(s)}`);
+      if (cmd === 'off') put('恢复：convledger on　·　要看板：convledger map（不常驻就 map --stop）');
+    })().catch((e) => {
+      put(`✗ ${cmd} 失败：${String(e?.message ?? e).split('\n')[0]}`);
+      process.exitCode = 1;
+    });
+    return;
+  }
+
+  // 宿主派活能力：只读表、只打表。这家走哪条通道、依据是什么、验到哪一步，一次说清。
+  if (cmd === 'caps') {
+    const t = capsTable(root);
+    if (flags.json) return out(t);
+    out('宿主派活能力（代码按 channel 出文案，不写 if）\n');
+    out(`当前接入状态（权威）：${t.statusSummary}\n`);
+    out('  状态与缺口以本表为准；CHANGELOG / NOTES / 旧 PRD 里的「未实测」是当时结论，不是现状。\n\n');
+    for (const r of t.rows) {
+      out(`  ${String(r.host).padEnd(13)} ${r.label}${r.overridden ? '　（覆盖表）' : ''}\n`);
+      out(`  ${' '.repeat(13)} 状态：${r.statusLabel}${r.gaps.length ? ' · 缺口：' + r.gaps.join('；') : ''}\n`);
+      out(`  ${' '.repeat(13)} 实测：${r.verified}\n`);
+      if (r.evidence) out(`  ${' '.repeat(13)} 出处：${r.evidence}\n`);
+      if (r.blocked) out(`  ${' '.repeat(13)} ⛔ 已证伪入口，派活改「不派」：${r.blocked}\n`);
+    }
+    if (t.warnings.length) {
+      out('\n警告（改派活方式前先消掉）：\n');
+      for (const w of t.warnings) out(`  [${w.level}] ${w.host}：${w.text}\n`);
+      out('  先跑 convledger caps --json 核实工具名与 evidence，别凭印象写工具名。\n');
+    }
+    out(`\n覆盖文件：${t.file || '无（用默认表）'}\n  写 ${capsFile(root)} 即可改，不用动代码；改哪家写哪家，没写的继续用默认。\n`);
+    out(`通道共五档：${t.channels.join(' / ')}\n`);
+    return;
+  }
+
   if (cmd === 'setup') {
     runSetup(root, flags, out).catch((e) => {
       out(`✗ setup 失败：${String(e?.message ?? e).split('\n')[0]}`);
@@ -696,12 +1148,13 @@ function main() {
     // WorkBuddy 的 handler 没有 name 字段（它只吃 {type, command, timeout}），靠命令行里的本仓脚本路径认。
     const confDirs = [
       ['qoder', (process.env.QODER_CONFIG_DIR || path.join(os.homedir(), '.qoder')).replace(/\\/g, '/')],
+      ['claude-code', (process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')).replace(/\\/g, '/')],
       ['workbuddy', (process.env.WORKBUDDY_CONFIG_DIR || path.join(os.homedir(), '.workbuddy')).replace(/\\/g, '/')],
     ];
     const registered = [];
     const settingsErrs = [];
     const ours = (h) => String(h?.name || '').startsWith('convledger-')
-      || /ledger-brief\.mjs/.test(String(h?.command || '').replace(/\\/g, '/'));
+      || [h?.command, h?.commandWindows].some((c) => /ledger-brief\.mjs/.test(String(c || '').replace(/\\/g, '/')));
     for (const [host, dir] of confDirs) {
       const file = `${dir}/settings.json`;
       try {
@@ -709,6 +1162,18 @@ function main() {
         for (const [ev, defs] of Object.entries(j.hooks || {})) {
           for (const d of defs || []) for (const h of d.hooks || []) {
             if (ours(h)) registered.push(`${host} ${ev}${d.matcher ? `(${d.matcher})` : ''} → ${h.name || 'ledger-brief'}`);
+          }
+        }
+      } catch (e) { settingsErrs.push(`${file} 读不到：${e.code || e.message}`); }
+    }
+    // Codex 的用户级 hooks 不在 settings.json：~/.codex/hooks.json（CODEX_HOME 可改）。
+    {
+      const file = `${(process.env.CODEX_HOME || path.join(os.homedir(), '.codex')).replace(/\\/g, '/')}/hooks.json`;
+      try {
+        const j = JSON.parse(fs.readFileSync(file, 'utf8'));
+        for (const [ev, defs] of Object.entries(j.hooks || {})) {
+          for (const d of defs || []) for (const h of d.hooks || []) {
+            if (ours(h)) registered.push(`codex ${ev} → ledger-brief`);
           }
         }
       } catch (e) { settingsErrs.push(`${file} 读不到：${e.code || e.message}`); }
@@ -769,7 +1234,7 @@ function main() {
       `压缩对照：源日志里与该次事件同刻（±120s）的 compact_boundary ${postReal.length} 次（PostCompact 留痕共 ${post.length} 行）${Object.keys(trig).length ? `；trigger ${Object.entries(trig).map(([k, v]) => `${k}=${v}`).join(' ')}` : ''}`,
       `注入：${inj.length ? `${inj.length} 次（${Object.entries(inj.reduce((a, r) => { const k = String(r.origin || 'legacy'); a[k] = (a[k] || 0) + 1; return a; }, {})).map(([k, v]) => `${k}=${v}`).join(' ')}），最近 ${inj[inj.length - 1].ts.slice(0, 19).replace('T', ' ')} ${inj[inj.length - 1].tokens} tok / ${inj[inj.length - 1].ms}ms` : '还没有一次真注入被留痕（PostCompact 未被观测＝宿主没发这个事件，或压缩还没发生）'}`,
       // 「脚本返回了 additionalContext」和「模型看见了这段话」是两件事，判定不许用前者冒充后者。
-      // 后者要第三方证据：2026-10-27 10:15 一个全新会话把注入的 brief 逐字复述了出来（会话 demo0004）；
+      // 后者要第三方证据：2026-10-27 10:15 一个全新会话把注入的 brief 逐字复述了出来（会话 b10b1769）；
       // 而 10:07:59 那次压缩后的新上下文里没有 PostCompact 注入的文本——同刻的 SessionStart 才是投递那一跳。
       `投递：${hostStartInj.length
         ? `SessionStart 真发并注入 ${hostStartInj.length} 次（其中 ${hostStartInj.filter((r) => r.foreign).length} 次是给新会话借读上一段账本）；2026-10-27 10:15 独立会话逐字复述过注入文本＝这一跳通；PostCompact 的注入在压缩后新上下文里没观测到`
@@ -801,8 +1266,12 @@ function main() {
       return out(text);
     }
     const { rows } = readRequests(dir);
-    const base = briefText(v, rows);
     const pl = projectBriefLine(root, v.meta?.cwd);
+    const collab = (() => {
+      try { return collabBrief(root, projectKey(v.meta.cwd || process.cwd()), { scenes: briefScenes(v, rows), context: briefContext(v, rows) }); }
+      catch { return []; }
+    })();
+    const base = briefText(v, rows, collab, { reserve: pl ? tok(pl) + 2 : 0 });
     const text = pl ? `${base}
 ${pl}` : base;
     trace(root, sid, 'brief', {}, { tokens: tok(text), phases: v.phases.length });
@@ -987,8 +1456,20 @@ ${pl}` : base;
       trace(root, sid, 'digest', { tasks: true }, { tokens: tok(text), tasks: miss.length });
       return out(text);
     }
-    const want = flags.block
-      ? v.steps.filter((s) => String(s.i) === String(flags.block))
+    // --block 支持单块、逗号列表、闭区间：60 / 60,61,63 / 60-63 —— 分小批补账要用到。
+    const blockIds = flags.block ? (() => {
+      const ids = new Set();
+      for (const part of String(flags.block).split(',')) {
+        const m = part.trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/);
+        if (!m) return null;
+        const a = Number(m[1]); const b = m[2] ? Number(m[2]) : a;
+        for (let i = Math.min(a, b); i <= Math.max(a, b); i++) ids.add(i);
+      }
+      return ids;
+    })() : null;
+    if (flags.block && !blockIds) return fail(`--block 写法不对：要 60 / 60,61 / 60-63，收到「${flags.block}」`);
+    const want = blockIds
+      ? v.steps.filter((s) => blockIds.has(s.i))
       : flags.all ? v.steps : v.steps.filter((s) => !summaryIsLive(sums, s, v.nodes));
     if (flags.block && !want.length) return fail(`没有块 ${flags.block}（1–${v.steps.length}）`);
     const missTasks = v.tasks.filter((t) => dominantTaskIds(v.steps).has(t.id) && !taskTitleIsLive(sums, t)).length;
@@ -1029,9 +1510,6 @@ ${pl}` : base;
     if (!flags.put) { out(usage()); return fail('用法: summarise --put <file|->（{"blocks":[{i,segs,short,title,said,answered,done}],"tasks":[{id,title}]}）  |  summarise --missing'); }
     // 先按当前源重建，再拿重建后的账本算锚点：这张表要落进的就是那个账本。
     // 活会话每几秒长一段，用重建前的视图算 hash，落盘那一刻已经过期（尾块必踩）。
-    writeStore(root, build(ledger.sourceFile, { storeRoot: root }));
-    v = readView(dir); sums = readSummaries(dir);
-    totals = { mainSteps: v.mainSteps, blocks: v.steps.length, nodes: v.nodes.length };
     let raw;
     if (flags.put === '-') {
       try { raw = fs.readFileSync(0, 'utf8'); } catch { return fail('summarise --put - 要从管道收 JSON'); }
@@ -1044,23 +1522,40 @@ ${pl}` : base;
     const bl = Array.isArray(payload?.blocks) ? payload.blocks : payload?.blocks ? Object.entries(payload.blocks).map(([i, x]) => ({ i, ...x })) : [];
     const tk = Array.isArray(payload?.tasks) ? payload.tasks : payload?.tasks ? Object.entries(payload.tasks).map(([id, x]) => ({ id, ...x })) : [];
     if (!bl.length && !tk.length) return fail('综述是空的：要 {"blocks":[{i,segs,short,title,said,answered,done}],"tasks":[{id,title}]}');
-    const errors = [];
-    const nextBlocks = { ...sums.blocks };
-    const nextTasks = { ...sums.tasks };
-    for (const e of bl) {
-      const s = v.steps.find((x) => x.i === Number(e?.i));
-      if (!s) { errors.push(`块 ${e?.i ?? '（缺 i）'}：不存在（1–${v.steps.length}）`); continue; }
-      const r = validateSummary(e, s, v.nodes, v.tasks, totals);
-      if (!r.ok) { errors.push(...r.errors.map((x) => `块${s.i}: ${x}`)); continue; }
-      nextBlocks[String(s.i)] = r.row;
+
+    // 校验 + 组装。锚点是「块内各段 id:hash」的 sha，历史段的内容不会因为源文件往后长而变，
+    // 所以在现有账本上就能校验通过——不必重建（读账本 15ms，从 23MB 源重建 1562ms）。
+    const attempt = () => {
+      const errors = [];
+      const nextBlocks = { ...sums.blocks };
+      const nextTasks = { ...sums.tasks };
+      for (const e of bl) {
+        const s = v.steps.find((x) => x.i === Number(e?.i));
+        if (!s) { errors.push(`块 ${e?.i ?? '（缺 i）'}：不存在（1–${v.steps.length}）`); continue; }
+        const r = validateSummary(e, s, v.nodes, v.tasks, totals);
+        if (!r.ok) { errors.push(...r.errors.map((x) => `块${s.i}: ${x}`)); continue; }
+        nextBlocks[String(s.i)] = r.row;
+      }
+      for (const e of tk) {
+        const t = v.tasks.find((x) => x.id === String(e?.id ?? '').toUpperCase());
+        if (!t) { errors.push(`任务 ${e?.id ?? '（缺 id）'}：不存在`); continue; }
+        const r = validateTaskTitle(e, t, v.steps, v.nodes);
+        if (!r.ok) { errors.push(...r.errors.map((x) => `任务${t.id}: ${x}`)); continue; }
+        nextTasks[t.id] = r.row;
+      }
+      return { errors, nextBlocks, nextTasks };
+    };
+
+    let applied = attempt();
+    if (applied.errors.length) {
+      // 落败多半是尾块锚点过期：活会话每几秒长一段，尾块的段列表可能已经多了一个。
+      // 只有这一种情况才按当前源重建再试一次；补历史块走上面的快路径，不白花这笔钱。
+      writeStore(root, build(ledger.sourceFile, { storeRoot: root }));
+      v = readView(dir); sums = readSummaries(dir);
+      totals = { mainSteps: v.mainSteps, blocks: v.steps.length, nodes: v.nodes.length };
+      applied = attempt();
     }
-    for (const e of tk) {
-      const t = v.tasks.find((x) => x.id === String(e?.id ?? '').toUpperCase());
-      if (!t) { errors.push(`任务 ${e?.id ?? '（缺 id）'}：不存在`); continue; }
-      const r = validateTaskTitle(e, t, v.steps, v.nodes);
-      if (!r.ok) { errors.push(...r.errors.map((x) => `任务${t.id}: ${x}`)); continue; }
-      nextTasks[t.id] = r.row;
-    }
+    const { errors, nextBlocks, nextTasks } = applied;
     if (errors.length) {
       for (const e of errors) out(`✗ ${e}`);
       out(`未落盘：${bl.length + tk.length} 条里 ${new Set(errors.map((e) => e.split(':')[0])).size} 条没过闸门（过了的也没写）`);
@@ -1576,6 +2071,46 @@ function indexAll(root, flags, out) {
 }
 
 /** 退出码：0 完成 · 1 输入/证据 · 2 冲突或忙 · 4 身份不可核（PRD §9.2）。 */
+/** 明确要启动（双击图标 / map / app / url）：先删全局暂停标记恢复，再起 hub。返回是否曾是暂停态。 */
+function resumeHub() {
+  try {
+    const f = path.join(TOOL_ROOT, 'out', 'HUB-PAUSED');
+    const had = fs.existsSync(f);
+    if (had) clearPaused(TOOL_ROOT);
+    return had;
+  } catch { return false; }
+}
+
+/** 交互式选装：列出这台机器上检测到的 Agent，让用户挑一个（不再无脑全装）。 */
+async function chooseClient(rows, facts, out) {
+  const avail = rows.filter((r) => r.hostFound || r.sourceFound);
+  if (!avail.length) {
+    out('· 这台机器上没检测到任何 Agent 的目录：先装一个 Agent 写段会话，或直接 setup --client <id>');
+    return null;
+  }
+  out('选择要安装的 Agent（每家只装它自己）：');
+  avail.forEach((r, i) => {
+    const skip = r.sqliteOnly && !facts.sqlite ? ' · Node<22.5 会跳过' : '';
+    out(`  ${i + 1}) ${r.label.padEnd(12)} ${r.hostFound ? '宿主已装' : '未检测到宿主（只建目录）'}${skip}`);
+  });
+  out('  a) 全部');
+  if (!process.stdin.isTTY) {
+    out('（非交互环境：请用 setup --client <id> 或 install-<agent>.cmd）');
+    return null;
+  }
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const ask = (q) => new Promise((res) => rl.question(q, res));
+  try {
+    const a = String(await ask('输入编号（a=全部，回车=取消）：')).trim().toLowerCase();
+    if (!a) return null;
+    if (a === 'a' || a === 'all') return 'all';
+    const n = Number(a);
+    if (Number.isInteger(n) && n >= 1 && n <= avail.length) return avail[n - 1].id;
+    out('· 没看懂这个编号，取消。');
+    return null;
+  } finally { rl.close(); }
+}
+
 async function runSetup(root, flags, emit) {
   const out = (s = '') => emit(typeof s === 'string' ? s.replace(/\n$/, '') + '\n' : s);
   const t0 = Date.now();
@@ -1617,7 +2152,21 @@ async function runSetup(root, flags, emit) {
 
   const sessions = listSessions();
   const rows = hostRows({ sessions, sqlite: facts.sqlite });
+  // —— 按 Agent 选装：只装你指定的那一家，不再一键把所有检测到的全装上 ——
+  //   --client <id|all>  明确点名（每家的独立安装脚本走这条）；不给也不是无脑全装，--choose 会问你。
+  let wantClient = flags.client ? String(flags.client) : null;
+  const known = new Set(rows.map((r) => r.id));
+  if (wantClient && wantClient !== 'all' && !known.has(wantClient)) {
+    return die(1, `✗ 未知 Agent「${wantClient}」；可选：${[...known].join(' / ')} / all`, out);
+  }
+  if (!wantClient && flags.choose && !flags.check) {
+    wantClient = await chooseClient(rows, facts, out);
+    if (!wantClient) return; // 非交互 / 用户取消
+  }
+  const selected = wantClient && wantClient !== 'all' ? rows.filter((r) => r.id === wantClient) : rows;
   out('');
+  if (wantClient && wantClient !== 'all') out(`只装：${selected.map((r) => r.label).join('、')}（其余 Agent 不碰）\n`);
+  else out('装全部检测到的 Agent（想只装某家用 install-<agent>.cmd 或 setup --client <id>）\n');
   for (const r of rows) {
     // 计数的名词统一用"会话"：账本里的"段"是压缩区间，一格会话有几段是另一回事
     const src = r.sessions ? `源 ${r.sessions} 个会话` : (r.sourceFound ? '源里 0 个会话' : '未找到源');
@@ -1625,26 +2174,29 @@ async function runSetup(root, flags, emit) {
     const skip = r.sqliteOnly && !facts.sqlite ? ' · Node <22.5，跳过' : '';
     // 投影缓存在仓库里，宿主与源库都不在这台机器上时那些会话仍会被列出——照实说，不拿它冒充"这台机器有 61 个"
     const cache = r.cached ? ` · 另有投影缓存 ${r.cached} 个会话（这台机器上没有源，不建账）` : '';
-    out(`${r.sessions ? '✓' : '·'} ${r.label.padEnd(11)} ${src} · ${host}${skip}${cache}`);
+    const mark = selected.includes(r) ? '' : '  （不装）';
+    out(`${r.sessions ? '✓' : '·'} ${r.label.padEnd(11)} ${src} · ${host}${skip}${cache}${mark}`);
   }
   if (!sessions.length) out('! 没有找到任何会话源：先让任一宿主写一段会话，再重跑 setup');
 
-  const planSkill = rows.filter((r) => r.canSkill);
-  const planHook = flags['no-hooks'] ? [] : rows.filter((r) => r.canHook);
+  const planSkill = selected.filter((r) => r.canSkill);
+  const planHook = flags['no-hooks'] ? [] : selected.filter((r) => r.canHook);
   // 只给"这台机器上真有源"的宿主建账：投影缓存不是源，拿它建账会让报告说"未检测到宿主"却建了几十段
-  const runners = new Set(rows.filter((r) => r.sourceFound).map((r) => r.id));
+  const runners = new Set(selected.filter((r) => r.sourceFound).map((r) => r.id));
   const buildable = sessions.filter((s) => s.bytes > 20000 && runners.has(s.runner));
-  let buildN = flags.all ? Infinity : 20;
+  // 默认一个历史会话都不建：新机器接入不该把过去几百段对话全跑一遍（跑一天也跑不完，还挤占机器）。
+  // 打开哪段建哪段（PRD-load §2.4 懒建账）。要历史用 --build N 或 --all，显式说。
+  let buildN = flags.all ? Infinity : 0;
   if (!flags.all && flags.build !== undefined) {
     const v = Number(flags.build);
-    if (!Number.isInteger(v) || v < 0) return die(1, `✗ --build 要一个非负整数（收到 "${flags.build}"）；0 = 每个来源只冒烟一段`, out);
+    if (!Number.isInteger(v) || v < 0) return die(1, `✗ --build 要一个非负整数（收到 "${flags.build}"）；0 = 一段历史都不建，只建当前会话`, out);
     buildN = v;
   }
   if (flags.check) {
     out('');
     out(`计划：Skill ${planSkill.map((r) => r.label).join('、') || '无'} · hooks ${planHook.map((r) => r.label).join('、') || '无'}`);
     const plan = buildN === Infinity ? `全量（本机可建 ${buildable.length} 个）`
-      : buildN === 0 ? `每个来源冒烟一个（--build 0）`
+      : buildN === 0 ? `只建当前这一段（默认，历史不建）`
       : `最近 ${buildN} 个（本机可建 ${buildable.length} 个）`;
     const launchLabel = process.platform === 'linux' ? '桌面入口' : process.platform === 'darwin' ? '启动入口（未实测）' : '快捷方式';
     out(`      建账 ${plan} · ${launchLabel} ${flags['no-shortcut'] ? '跳过' : '建/更新'} · hub ${flags['no-open'] ? '只起不打开' : '起并打开会话库'}`);
@@ -1664,16 +2216,22 @@ async function runSetup(root, flags, emit) {
   const inStore = () => (fs.existsSync(root) ? fs.readdirSync(root).filter((d) => fs.existsSync(path.join(root, d, 'ledger.json'))).length : 0);
   let buildNote = '';
   if (buildN === 0) {
-    // 只想验管线通不通：每个有源的宿主建一个，别的一概不碰
-    for (const r of rows.filter((x) => x.sessions)) {
+    // 只建「你此刻正在用的这一段」。历史一律不碰——那正是这条默认要挡住的东西。
+    let cur = null;
+    try { cur = resolveCurrent({ root, cwd: process.cwd(), sessions }); } catch { cur = null; }
+    if (cur && cur.sessionId && cur.file && !cur.indexed) {
       try {
-        const s = smoke(root, sessions, r.id);
-        if (s) out(`✓ 冒烟建账：${r.label} ${s.id.slice(0, 8)}${s.built ? `（${s.segments} 段）` : '（已有账本）'}`);
+        writeStore(root, build(cur.file, { storeRoot: root }));
+        out(`✓ 建账：只建当前这段 ${String(cur.runner || '').trim()} ${cur.sessionId.slice(0, 8)}（打开哪段建哪段，历史没碰）`);
       } catch (e) {
-        out(`✗ 冒烟失败：${r.label}——${String(e?.message ?? e).split('\n')[0]}`);
+        out(`✗ 当前这段建账失败：${String(e?.message ?? e).split('\n')[0]}`);
       }
+    } else if (cur && cur.sessionId && cur.indexed) {
+      out(`✓ 当前这段已有账本：${cur.sessionId.slice(0, 8)}（历史没碰）`);
+    } else {
+      out(`· 建账：0 个。没认出「当前会话」，历史也一个没建——打开任意一段会话时会只建那一段（PRD-load §2.4）`);
     }
-    buildNote = '只按每个来源冒烟一个（--build 0），其余会话没建账';
+    buildNote = '未建任何历史会话（打开哪段建哪段）；要看历史用 --build N 或 --all';
   } else {
     const b = buildRecent(root, sessions, buildN, runners);
     const scope = Number.isFinite(buildN) ? `最近 ${buildN} 个` : `全部 ${b.total} 个`;
@@ -1699,14 +2257,27 @@ async function runSetup(root, flags, emit) {
     else out(`✗ 快捷方式：${sc.reason}——不影响页面使用：地址在浏览器里直接打开就行，回头可跑 convledger url --copy`);
   }
 
-  const hub = port.state === 'hub'
-    ? { port: port.port, reused: true }
-    : await ensureHub(root, 8765);
-  if (!hub) return die(1, '✗ hub 没能在 8765 上起来', out);
-  const url = `http://127.0.0.1:${hub.port}/`;
-  out(`✓ hub ${hub.reused ? '复用' : '新起'} → ${url}（会话库）`);
-  if (!flags['no-open']) openUrl(url);
-  else out('（--no-open：由你在宿主的浏览器面板里打开这个地址）');
+  // 默认不起常驻 hub：装完不占后台内存，不让人一装就卡。双击桌面「convledger 地图」或
+  // 跑 convledger map 才起（会先清全局暂停）。--hub 明确要起；--no-hub 明确跳过。
+  const wantHub = !!flags.hub && !flags['no-hub'];
+  let hub = { port: 8765, reused: false, skipped: true };
+  let hubStarted = false;
+  let url = 'http://127.0.0.1:8765/';
+  if (wantHub) {
+    resumeHub();
+    hub = await ensureHubAuto(root, (flags.port !== undefined && Number.isInteger(+flags.port)) ? +flags.port : 8765);
+    if (!hub || hub.paused || hub.skipped) return die(1, '✗ hub 没能在 8765 上起来（端口被占用或启动失败；可用 --port 指定）', out);
+  }
+  if (flags['no-hub']) out('· hub：跳过（--no-hub；之后双击桌面「convledger 地图」或跑 convledger map 开始）');
+  else if (!wantHub) out('· hub：未启动（默认不常驻，装完不占后台内存；双击桌面「convledger 地图」或跑 convledger map 开始）');
+  if (wantHub && hub) {
+    url = `http://127.0.0.1:${hub.port}/`;
+    hubStarted = true;
+    if (hub.fallback) out(`· 首选端口 ${hub.busyAt ?? 8765} 被别的程序占用，临时改用 ${hub.port} → ${url}（腾出后重跑 setup 可回到首选）`);
+    else out(`✓ hub ${hub.reused ? '复用' : '新起'} → ${url}（会话库）`);
+    if (!flags['no-open']) openUrl(url);
+    else out('（--no-open：由你在宿主的浏览器面板里打开这个地址）');
+  }
   out('');
   out(`就绪：${rows.filter((r) => r.sessions).map((r) => `${r.label} ${r.sessions} 个`).join(' · ') || '无来源'} · 账本 ${inStore()} 个会话 · 用时 ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 
@@ -1720,10 +2291,12 @@ async function runSetup(root, flags, emit) {
   else if (!planHook.length) todo.push('没检测到宿主配置目录：压缩后不会自动注入账本');
   if (flags['no-shortcut']) todo.push('没建快捷方式：重跑 setup（去掉 --no-shortcut）');
   out('下一步：');
-  out(`  1. 打开 ${url} —— 会话库列出本机所有已建账的会话`);
+  out(hubStarted
+    ? `  1. 打开 ${url} —— 会话库列出本机所有已建账的会话`
+    : '  1. 双击桌面「convledger 地图」打开会话库（装完默认不起常驻服务；或现在跑 convledger map 起）');
   out('  2. 点一行进画布：中景看每一程做了什么，点块看「我的要求 / 经验」；右下角「落后 N 秒」的 N 归 0 才表示画到了最新');
   out(`  3. ${todo.length ? todo.join('；') : '来源都接上了，账也建全了'}（块综述与阶段说明要由模型在会话里补：convledger outstanding）`);
-  out('  4. 页面关了怎么回来：双击桌面或开始菜单的「convledger 地图」，或跑 convledger url --copy');
+  out('  4. 页面关了怎么回来：双击桌面或开始菜单的「convledger 地图」，或跑 convledger url --copy（地址带门禁 token，只在本机用）。桌面 APP 是浏览器 --app 应用窗（无地址栏、不加载浏览器插件），关窗后 hub 10 分钟自动退');
 }
 
 function die(code, msg, out) { out(msg); process.exit(code); }

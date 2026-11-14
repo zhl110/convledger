@@ -1,14 +1,104 @@
-// 项目任务页：连续缩放（滑杆 / Ctrl+滚轮）叠在四档表达层之上；依赖用 SVG 箭头画。
+// 项目工作台：连续缩放（滑杆 / Ctrl+滚轮）叠在四档表达层之上；依赖用 SVG 箭头画。
 // 只读、无框架。数据只有一份：progress-state.json → projectView。
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+/** 项目页的“空状态”：任务状态还没生成（或这个键在本机没有会话）。
+ *  这里不返回纯文本 404——从画布点过来的人需要知道为什么空、下一步做什么、怎么回去。 */
+export function projectEmptyHtml({ key = '', name = '', cwd = '', sessions = [], known = true, error = '', cli = '' } = {}) {
+  const newest = sessions[0] ?? null;
+  const tool = cli ? `node "${String(cli).replace(/\\/g, '/')}"` : 'convledger';
+  const cmd = `${tool} sync --prepare --project ${key}${newest ? ` --session ${newest.sid8}` : ' --session <会话前8位>'}`;
+  const rows = sessions.slice(0, 6).map((s) => `<li><a href="/s/${encodeURIComponent(s.id)}/">${esc(s.title || s.sid8 || s.id)}</a>`
+    + `<span class="meta">${esc(s.runner || '')} · ${esc(String(s.sid8 || '').slice(0, 8))}${s.live ? ' · <b class="live">在写</b>' : ''}</span></li>`).join('');
+  return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(name || key)} · 还没有任务状态</title>
+<style>
+:root{--line:#e3e7ee;--muted:#5b6775;--accent:#1f5fa8;--bg:#f6f7f9}
+body{margin:0;background:var(--bg);color:#1c2430;font:15px/1.6 "Segoe UI","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif}
+a{color:var(--accent)}
+.bar{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:12px;padding:10px 22px;background:#fff;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.brandmark{display:inline-block;width:20px;height:20px;background:currentColor;-webkit-mask:url('/icon-small.svg') center/contain no-repeat;mask:url('/icon-small.svg') center/contain no-repeat}
+.bar a{color:var(--accent);text-decoration:none}.bar a:hover{text-decoration:underline}
+.bar a.back-session{border:1px solid var(--line);border-radius:7px;padding:3px 10px;font-weight:600}
+.bar b{font-size:16px}.rev{color:var(--muted);font-size:12px}
+main{max-width:860px;margin:0 auto;padding:22px 22px 44px}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:20px 22px;margin-bottom:14px}
+h1{font-size:20px;margin:0 0 6px}
+.lead{color:#3a4552;margin:0 0 12px}
+.kv{display:grid;grid-template-columns:88px 1fr;gap:4px 12px;color:#3a4552;font-size:14px;margin:10px 0 4px}
+.kv dt{color:var(--muted)}.kv dd{margin:0;word-break:break-all}
+ol{margin:10px 0 0;padding-left:20px}ol li{margin:4px 0}
+pre{background:#f3f5f8;border:1px solid var(--line);border-radius:8px;padding:10px 12px;overflow:auto;font-size:13px;margin:8px 0}
+button{border:1px solid var(--line);background:#fff;border-radius:7px;padding:3px 10px;cursor:pointer;font-size:13px;color:#3a4552}
+button:hover{border-color:var(--accent);color:var(--accent)}
+.acts{display:flex;gap:10px;flex-wrap:wrap;margin-top:14px}
+.acts a,.acts button{display:inline-block;border:1px solid var(--line);background:#fff;border-radius:8px;padding:6px 14px;text-decoration:none;font-weight:600;color:var(--accent)}
+.acts a.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+ul.sess{margin:6px 0 0;padding-left:18px}ul.sess li{margin:4px 0}
+.meta{color:var(--muted);font-size:12px;margin-left:8px}.live{color:#1f7a4d}
+.err{color:#8a5a0e;background:#fdf3e3;border:1px solid #edd0a4;border-radius:8px;padding:8px 12px;font-size:13px}
+body.embed .bar{display:none}
+</style></head><body>
+<script>if(new URLSearchParams(location.search).get('embed')==='1')document.body.classList.add('embed');</script>
+<div class="bar"><span class="brandmark" aria-hidden="true"></span><b>项目工作台</b><span class="rev">${esc(key)}</span>
+<a class="back-session" id="back" hidden>← 返回会话</a><a href="/" style="margin-left:auto">会话库</a></div>
+<main>
+<div class="card">
+<h1>${known ? '这个项目还没有任务状态' : '没有这个项目'}</h1>
+<p class="lead">${known
+    ? '会话画布和账本已经有了，但项目任务表要跑一次收尾同步才会生成——它不是按会话自动建的。'
+    : `项目按工作目录归组。这个键（${esc(key)}）在本机没有对应会话：换一个入口，或先打开会话库。`}</p>
+${error ? `<p class="err">状态文件读不了：${esc(error)}</p>` : ''}
+<dl class="kv">
+  <dt>项目</dt><dd>${esc(name || key)}</dd>
+  ${cwd ? `<dt>工作目录</dt><dd>${esc(cwd)}</dd>` : ''}
+  <dt>会话</dt><dd>${sessions.length ? `${sessions.length} 段` : '没有'}</dd>
+</dl>
+${known ? `<ol>
+<li>在对应会话里让 agent 跑下面这条（它会冻结素材并给出回执）：</li>
+</ol>
+<pre id="cmd">${esc(cmd)} <button id="copy" type="button">复制</button></pre>
+<ol start="2">
+<li>按素材更新任务（结果 / 欠项 / 验收）与处置，再 <code>sync --put</code>。</li>
+<li>刷新本页，任务表与经验就会出现。</li>
+</ol>` : ''}
+${rows ? `<p style="margin:14px 0 0"><b>这个项目里的会话</b></p><ul class="sess">${rows}</ul>` : ''}
+<div class="acts">
+<a class="primary" id="back2" href="${newest ? `/s/${encodeURIComponent(newest.id)}/` : '/'}"${newest ? '' : ' hidden'}>← 返回会话</a>
+<a href="/">打开会话库</a>
+</div>
+</div>
+</main>
+<script>
+(function () {
+  function safe(p) { return typeof p === 'string' && /^\\/s\\/[^\\/]+\\//.test(p) ? p : ''; }
+  var from = safe(new URLSearchParams(location.search).get('from'));
+  var back = document.getElementById('back'), back2 = document.getElementById('back2');
+  if (from) {
+    var cut = from.indexOf('#'), hash = cut >= 0 ? from.slice(cut) : '';
+    var path = cut >= 0 ? from.slice(0, cut) : from;
+    back.hidden = false; back.href = path + hash;
+    back2.href = path + hash;
+  }
+  var btn = document.getElementById('copy');
+  if (btn) btn.addEventListener('click', function () {
+    var t = document.getElementById('cmd').textContent.replace('复制', '').trim();
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () {
+      btn.textContent = '已复制'; setTimeout(function () { btn.textContent = '复制'; }, 1600);
+    }, function () { btn.textContent = '手动选上面那条'; });
+  });
+})();
+</script>
+</body></html>`;
+}
 
 export function projectPageHtml(view, { name = '', key = '', at = new Date(), live = null, insights = null } = {}) {
   const data = JSON.stringify({ view: { ...view, insights }, name, key, at: at.toISOString(), live }).replace(/</g, '\\u003c');
   return `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>${esc(name || key)} · 任务进度</title>
+<title>${esc(name || key)} · 工作台</title>
 <style>
 :root{--line:#e3e7ee;--muted:#5b6775;--accent:#1f5fa8;--bg:#f6f7f9}
-body{margin:0;background:var(--bg);color:#1c2430;font:15px/1.6 "Segoe UI",system-ui,sans-serif}
+body{margin:0;background:var(--bg);color:#1c2430;font:15px/1.6 "Segoe UI","Microsoft YaHei UI","Microsoft YaHei",system-ui,sans-serif}
 a{color:var(--accent)}
 .bar{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:12px;padding:10px 22px;background:#fff;border-bottom:1px solid var(--line);flex-wrap:wrap}
 .brandmark{display:inline-block;width:20px;height:20px;background:currentColor;-webkit-mask:url('/icon-small.svg') center/contain no-repeat;mask:url('/icon-small.svg') center/contain no-repeat}
@@ -82,8 +172,13 @@ ul.ev{margin:6px 0 0;padding-left:18px;color:#4a5563;font-size:13px}
 .ilit .ineed{color:#7a8494;font-size:12px;margin-left:6px}
 .imem{margin:3px 0;font-size:13px;color:#26303d}
 .imem .icl{font-size:11px;color:#7a8494;margin-right:6px}
+.imem .isrc{display:block;margin-top:2px;font-size:10.5px;color:var(--muted);font-variant-numeric:tabular-nums}
 .iempty{color:#8a94a3;font-size:13px;margin:4px 0}
+body.embed .bar{padding:6px 14px;gap:8px}
+body.embed .bar .brandmark,body.embed .bar #pname,body.embed .bar #prev,body.embed .bar a{display:none}
+body.embed .bar .zoom{margin-left:0}
 </style><link rel="icon" type="image/svg+xml" href="/icon-small.svg"></head><body>
+<script>if(new URLSearchParams(location.search).get('embed')==='1')document.body.classList.add('embed');</script>
 <div class="bar"><i class="brandmark" aria-hidden="true"></i><b id="pname"></b><span class="rev" id="prev"></span>
   <div class="zoom" role="group" aria-label="缩放">
     <button data-lv="overview" data-z="10">总览</button><button data-lv="far" data-z="35">远景</button><button data-lv="mid" data-z="60">中景</button><button data-lv="near" data-z="85">近景</button>
@@ -385,7 +480,7 @@ ul.ev{margin:6px 0 0;padding-left:18px;color:#4a5563;font-size:13px}
     card.appendChild(el('h2', null, '经验 · 按阶段'));
     card.appendChild(el('p', 'isub', '块综述里的 lesson，按会话与阶段收拢（共 ' + (ex.total || 0) + ' 条，读最近 ' + (ex.sessions || 0) + ' 本账）；点会话号回到那张画布'));
     if (!ex.groups || !ex.groups.length) {
-      card.appendChild(el('p', 'iempty', '0 条 —— 综述还没写 lesson（agent 用 digest --block N → summarise --put 补）'));
+      card.appendChild(el('p', 'iempty', '0 条 —— 综述还没写 lesson（agent 用 digest → summarise --put 一次批量补）'));
     } else {
       if (ex.totalGroups && ex.totalGroups > ex.groups.length) card.appendChild(el('p', 'iempty', '共 ' + ex.totalGroups + ' 组经验（' + ex.total + ' 条），这里列最近 ' + ex.groups.length + ' 组'));
       ex.groups.forEach(function (g) {
@@ -413,20 +508,45 @@ ul.ev{margin:6px 0 0;padding-left:18px;color:#4a5563;font-size:13px}
 
     var pc = el('section', 'icard');
     pc.appendChild(el('h2', null, '用户画像 · 做事方式'));
-    pc.appendChild(el('p', 'isub', '用户表（跨项目）＋本项目的经验与规则；每条带来源，可回读'));
+    // 归纳时机：判据是「自上次归纳以来新增了多少」，不是日历。没攒够就不显示，
+    // 所以这一行不会常驻成噪音；攒够了它才出现，替掉「什么时候该归纳」这个要人记的事。
+    var md = I.memory || null;
+    if (md && ((md.project && md.project.due) || (md.user && md.user.due))) {
+      var tips = [];
+      if (md.project && md.project.due) tips.push('项目记忆该归纳了：自上次新增 ' + md.project.lessons + ' 条经验、' + md.project.sessions + ' 个会话');
+      if (md.user && md.user.due) tips.push('用户画像该更新了：自上次新增 ' + md.user.sessions + ' 个会话');
+      var tip = el('p', 'isub', '⚠ ' + tips.join('；') + '（看增量不看日历；取材 memory --digest，过闸门才落盘）');
+      tip.style.color = '#8a5a00';
+      pc.appendChild(tip);
+    }
+    pc.appendChild(el('p', 'isub', '用户画像只有一份、所有项目共用（跨项目证据）；标「项目经验 / 项目规则」的才是本项目自己的。每条带来源，可回读'));
+    var dims = ['目标', '边界', '规则', '偏好', '背景', '验收', '分工', '反馈', '性格'];
     var rows = [];
     if (!(pf.user && pf.user['画像'] && pf.user['画像'].length)) pc.appendChild(el('p', 'iempty', '用户画像 0 条 —— 还没写：memory --put --scope user（跨会话的证据，不自动编）'));
     (pf.user && pf.user['画像'] || []).forEach(function (e) { rows.push(['画像', e]); });
     (pf.user && pf.user['规则'] || []).forEach(function (e) { rows.push(['通用规则', e]); });
     (pf.project && pf.project['经验'] || []).forEach(function (e) { rows.push(['项目经验', e]); });
     (pf.project && pf.project['规则'] || []).forEach(function (e) { rows.push(['项目规则', e]); });
+    if (rows.length) {
+      var cover = dims.map(function (d) {
+        var n = rows.filter(function (r) { return r[1].dimension === d; }).length;
+        return d + (n ? ' ' + n : ' ·');
+      }).join(' ');
+      pc.appendChild(el('p', 'isub', '维度覆盖：' + cover + '（没写到的维度是证据还不够，不硬编）'));
+    }
     if (!rows.length) {
       pc.appendChild(el('p', 'iempty', '0 条 —— 还没写。画像：memory --put --scope user；项目经验/规则：memory --put；都要跨会话证据，不自动编。'));
     } else {
       rows.slice(0, 30).forEach(function (r) {
         var d = el('div', 'imem');
-        d.appendChild(el('span', 'icl', r[0] + (r[1].id ? ' ' + r[1].id : '')));
+        d.appendChild(el('span', 'icl', r[0] + (r[1].id ? ' ' + r[1].id : '') + (r[1].dimension ? ' · ' + r[1].dimension : '')));
         d.appendChild(document.createTextNode(r[1].text));
+        if (r[1].evidence && r[1].evidence.length) {
+          var src = r[1].evidence.map(function (ev) {
+            return (ev.project || '').replace(/^p-/, '').slice(0, 6) + ':' + (ev.sid || '') + ':' + (ev.seg || '');
+          });
+          d.appendChild(el('span', 'isrc', '来源 ' + src.join(' · ')));
+        }
         pc.appendChild(d);
       });
       if (rows.length > 30) pc.appendChild(el('p', 'iempty', '共 ' + rows.length + ' 条，这里列前 30 条'));

@@ -122,3 +122,12 @@ export const MEMORY_DIGEST_PER_SESSION = 2800;
 // memory 读取：首跑零记忆 227t、4 条记忆 342t；固定 300 覆盖「现在到哪」，每条按上限 110t 计。
 export const MEMORY_READ_FIXED = 300;
 export const MEMORY_READ_PER_ENTRY = 110;
+
+// 记忆归纳的触发门（PRD-memory §十二，2026-11-12 用户定）：看增量，不看日历。
+// 项目记忆：自上次归纳以来新增多少条带 lesson 的块 / 多少个会话分析过；
+// 用户画像：自上次画像以来新增多少个会话。
+// 注意与「证据门」分开：一条画像至少 2 个不同会话的证据是写入闸门（MEMORY_* 那几条），
+// 不随这里的触发门变化。阈值是启动值，跑一段按命中率调——只改这里，别在别处写数字。
+export const MEMORY_PROJECT_LESSON_DUE = 8;
+export const MEMORY_PROJECT_SESSION_DUE = 3;
+export const MEMORY_USER_SESSION_DUE = 8;

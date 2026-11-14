@@ -127,7 +127,7 @@
         made: s.made, outs: s.outs, files: s.files || [], lines: s.lines, segIds: s.segIds,
         say: s.say, sayFrom: s.sayFrom,
         // 模型写的五格综述（basis=model，非已证）。没有就是没有：页面回落成原话截段并明说。
-        sum: s.sum || null, sumFrom: s.sumFrom || '',
+        sum: s.sum || null, sumFrom: s.sumFrom || '', pending: !!s.pending,
         fork: s.fork, back: s.back, dominant: s.dominant,
         afterStep: s.afterStep ?? null, beforeStep: s.beforeStep ?? null, bridge: s.bridge || null,
         phase: s.phase ?? null,
@@ -292,7 +292,7 @@
     S.groupEl = null;
     var last = S.parts[S.parts.length - 1];
     S.parts.forEach(function (p) {
-      var card = el('div', 'p lv' + p.level + ' r' + roleCls(p) + (last && p === last ? ' now' : '') + (p.open ? ' todo' : '') + (p.errs ? ' warn' : ''));
+      var card = el('div', 'p lv' + p.level + ' r' + roleCls(p) + (last && p === last ? ' now' : '') + (p.open ? ' todo' : '') + (p.errs ? ' warn' : '') + (p.pending ? ' pending' : ''));
       card.dataset.from = p.from;
       card.dataset.i = p.i;
       card.dataset.kind = p.step == null ? 'interlude' : 'main';
@@ -343,7 +343,8 @@
     badge.appendChild(el('b', '', p.step == null ? '插' : p.step));
     badge.appendChild(el('i', '', p.step == null ? (betweenShort(p) || '曲块') : '步'));
     g.appendChild(badge);
-    g.appendChild(el('div', 'fwhat', p.mark || (p.compacts ? '压缩' : '—')));
+    // 远景先给标题（有综述就是综述，没有就是派生的状态），不拿用户原话的截段当卡面。
+    g.appendChild(el('div', 'fwhat', p.gist || p.mark || (p.compacts ? '压缩' : '—')));
     return g;
   }
 
@@ -365,6 +366,8 @@
     //  inline 进去就要从摘要里吃掉几个字——摘要少字比出处少一行贵。
     if (p.gistFrom) g.appendChild(el('div', 'msrc', '摘要取自 ' + p.gistFrom + ' 的真人原话'));
     else if (p.sum) g.appendChild(el('div', 'msrc', '模型综述 · 依据 ' + p.sumFrom));
+    // 没写综述的块：标题显示原文截断，但「待补综述」这个标注要留着（用户口径：描述还是得有）。
+    else if (p.pending) g.appendChild(el('div', 'msrc pend', '待补综述 · 标题显示原文截断，收尾时 agent 写完自动替换'));
     else if (p.gistDerived) g.appendChild(el('div', 'msrc', '无模型综述 · 标题按产物与结构生成'));
     g.appendChild(el('div', 'msolved', p.sum ? p.sum.done : p.solved));
     var meta = el('div', 'mmeta');
@@ -409,6 +412,7 @@
     meta.appendChild(el('span', 'chip', p.segs + ' 段'));
     meta.appendChild(el('span', 'chip', p.tasks + ' 支' + (p.heads ? ' · 起 ' + p.heads + ' 头' : '')));
     meta.appendChild(el('span', 'chip ' + (p.verified ? 'vf' : 'vf0'), p.verified ? '已证 ' + p.verified + '/' + p.segs : '无已证'));
+    if (p.pending) meta.appendChild(el('span', 'chip pend', '待补综述'));
     // 计数行里的决策/排除/规则：每个数都是块内已证增量按 move 数的，不是估的
     if (p.decisions) meta.appendChild(el('span', 'chip', '⚖ ' + p.decisions));
     if (p.ruledOut) meta.appendChild(el('span', 'chip', '✕ ' + p.ruledOut));
@@ -589,6 +593,10 @@
   };
   function applyCam() {
     world.style.transform = 'translate3d(' + S.cam.x.toFixed(2) + 'px,' + S.cam.y.toFixed(2) + 'px,0) scale(' + S.cam.z.toFixed(5) + ')';
+    // 动的时候临时提升图层保流畅；停手 260ms 收回，让浏览器按当前倍率重新栅格化——否则放大后字是放大过的位图，发虚。
+    world.style.willChange = 'transform';
+    clearTimeout(applyCam._wc);
+    applyCam._wc = setTimeout(function () { world.style.willChange = 'auto'; }, 260);
     var z = S.cam.z;
     wires.style.setProperty('--sw', (1.3 / z).toFixed(3) + 'px');
     wires.style.setProperty('--dash', (5 / z).toFixed(2) + ' ' + (7 / z).toFixed(2));
@@ -601,8 +609,12 @@
     // 章笔记按屏幕像素排，位置跟着镜头换章——每帧只算二十来个矩形，不重建 DOM 就不重画
     syncChapNote();
     rowhint.textContent = (S.v ? S.v.meta.segs + ' 段 · ' + S.parts.length + ' 块 · ' + (S.v.mainSteps || 0) + ' 步 · '
-      + (S.phases.length ? S.phases.length + ' 阶段 · ' : '') : '') +
+      + (S.phases.length ? S.phases.length + ' 阶段 · ' : '')
+      + (S.pendingN ? '待补综述 ' + S.pendingN + ' 块 · ' : '') : '') +
       '缩放 ' + Math.round(z * 100) + '% · ' + HINT[t];
+    rowhint.title = S.pendingN
+      ? '这 ' + S.pendingN + ' 块还没有模型综述，先显示原文截断；补账写好会自动换成综述。'
+      : '';
     if (S.mm) updateMMVP();
   }
 
@@ -1885,13 +1897,15 @@
       inspbody.appendChild(factRow('做成什么', p.sum.done));
       inspbody.appendChild(el('div', 'isrc', '模型综述（归纳，不过六条判据） · 依据 ' + (p.sumFrom || p.span) + '；「我的要求」旧综述回落到「你说」摘要，核对面是下面的原文'));
     } else {
-      inspbody.appendChild(factRow('我的要求', '这块还没有模型综述——先 convledger digest --block ' + p.i + ' 取材，再写 need/lesson'));
-      inspbody.appendChild(factRow('经验', '（同上；综述落盘后这里才有东西）'));
+      // 没写综述：正文给这一块的对话截断（用户真人原话），但明确标注「待补综述」，不空着。
+      var askRaw = (p.say && String(p.say).trim()) ? String(p.say).trim() : '';
+      inspbody.appendChild(factRow('我的要求', askRaw ? (askRaw.length > 140 ? askRaw.slice(0, 140) + '…' : askRaw) : '（这块里没有真人提问）'));
+      inspbody.appendChild(factRow('经验', '（这块没有单列可复用的经验）'));
       var files = p.files || [];
       inspbody.appendChild(factRow('做成什么', files.length
         ? '改了' + cnJoin(kindList(files)) + '（共 ' + files.length + ' 个文件）'
         : p.wrote ? '写出 ' + p.wrote + ' 件产物' : '没有写出文件，只读了东西或跑了命令'));
-      inspbody.appendChild(el('div', 'isrc', '这块还没有模型综述（convledger digest --block ' + p.i + ' 取材）'));
+      inspbody.appendChild(el('div', 'isrc', '待补综述 · 以上「我的要求」是原文截断；收尾时 agent 读完素材写综述，写完这里会换成综述'));
     }
 
     var spec = p.segIds.length > 1 ? (p.segIds[0] + '-' + p.segIds[p.segIds.length - 1]) : (p.segIds[0] || p.from);
@@ -2098,27 +2112,6 @@
     if (savedTheme === 'light') document.body.dataset.theme = 'light';
   } catch (_) { /* ignore */ }
 
-  // 补账档位：本机共用一份（/prefs.json），Stop hook 按它决定什么时候拦 agent 补综述。
-  var cadenceSel = $('cadence');
-  function loadPrefs() {
-    fetch('/prefs.json').then(function (r) { return r.json(); }).then(function (p) {
-      if (p && p.summaryCadence && cadenceSel) cadenceSel.value = p.summaryCadence;
-    }).catch(function () { /* 读不到就按默认档显示 */ });
-  }
-  if (cadenceSel) {
-    loadPrefs();
-    cadenceSel.addEventListener('change', function () {
-      fetch('/prefs', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ summaryCadence: cadenceSel.value })
-      }).then(function (r) { return r.json(); }).then(function (j) {
-        if (!j || !j.ok) throw new Error((j && j.errors && j.errors[0]) || '写入失败');
-        toast('✓ 补账档位：' + cadenceSel.options[cadenceSel.selectedIndex].text);
-      }).catch(function (e) { toast('补账档位没写成：' + e.message, true); loadPrefs(); });
-    });
-  }
-
   find.addEventListener('input', function () { S.q = find.value; applySearch(); });
   find.addEventListener('keydown', function (e) {
     if (e.key === 'Enter') {
@@ -2218,10 +2211,17 @@
     });
   }
 
-  function live(text, ok, tip) {
+  function live(text, ok, tip, refreshing) {
     liveEl.textContent = text;
     liveEl.title = tip || text;
-    liveEl.className = 'live ' + (ok ? 'ok' : 'bad');
+    liveEl.className = 'live ' + (ok ? 'ok' : 'bad') + (refreshing ? ' refreshing' : '');
+  }
+
+  /* 后台正在重算时，这行换成转圈＋「正在更新最新信息」；算完回到「已同步 · 落后 N 秒」。
+     圈是 CSS 画的，不吃点击，前台交互一刻不停（PRD-refresh）。 */
+  function liveSync(m) {
+    var rf = !!(m && m.refreshing);
+    live(rf ? '正在更新最新信息' : freshLine(m), true, freshTitle(m), rf);
   }
 
   /* 这段画布的身份：谁（runner）、哪个模型、在哪、哪段会话、什么时候、正文有没有归档。
@@ -2294,7 +2294,9 @@
 
   function adopt(v, first) {
     S.v = v;
-    // 会话画布 → 项目任务页：项目键由服务端按 cwd 算（和 /projects.json 同一把尺），没有就不显示入口。
+    var bs = document.getElementById('bootskel');
+    if (bs) bs.remove();
+    // 会话画布 → 项目工作台：项目键由服务端按 cwd 算（和 /projects.json 同一把尺），没有就不显示入口。
     var pl = document.getElementById('projpage');
     if (pl) {
       var pk = v.meta && v.meta.projectKey;
@@ -2311,6 +2313,7 @@
     S.chapFocus = null;
     S.tail = v.tail || null;
     S.parts = partsOf(v);
+    S.pendingN = S.parts.filter(function (q) { return q.pending; }).length;
     if (S.tail) S.parts.forEach(function (p) {
       p.isTail = p.step != null && p.step >= S.tail.from && p.step <= S.tail.to;
     });
@@ -2338,7 +2341,7 @@
     S.mmDirty = true;
     drawMM();
     renderAsk();
-    live(freshLine(v.meta), true, freshTitle(v.meta));
+    liveSync(v.meta);
   }
 
   /* 「已同步」这行只留最要紧的两段；完整构建时间放在悬停提示里，
@@ -2366,14 +2369,33 @@
     fetch(BASE + '/data.json', { cache: 'no-store' })
       .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function (v) {
-        live(freshLine(v.meta), true, freshTitle(v.meta));
+        // 未建账会话：后台正在建账（PRD-load）。骨架先顶着，不 adopt 空图；建完自动换真视图。
+        if (v.meta && v.meta.building) {
+          var bs = document.getElementById('bootskel');
+          if (bs) {
+            var bl = bs.querySelector('.bslabel'), bh = bs.querySelector('.bshint');
+            if (bl) bl.textContent = '正在建账 · 首次打开这段会话…';
+            if (bh) bh.textContent = '后台正在为这段会话建账，建完自动换成画布，不用刷新';
+          }
+          live('正在建账…', true, '后台建账中，前台不阻塞', true);
+          return;
+        }
+        liveSync(v.meta);
         var sig = sigOf(v);
         if (sig === S.sig) return;
         if (S.pan) { S.pending = v; return; }
         if (!S.v) adopt(v, true);
         else adopt(v, false);
       })
-      .catch(function () { live('离线 · 4 秒后重试', false); })
+      .catch(function () {
+        live('离线 · 4 秒后重试', false);
+        var bs = document.getElementById('bootskel');
+        if (bs && !S.v) {
+          var l = bs.querySelector('.bslabel'), h = bs.querySelector('.bshint');
+          if (l) l.textContent = '账本一时读不到，4 秒后重试…';
+          if (h) h.hidden = true;
+        }
+      })
       .then(function () { setTimeout(poll, 4000); });
   }
 
@@ -2454,17 +2476,19 @@
   }
 
   function libRow(s, current) {
-    var a = el('a', 'librow' + (s.live ? ' is-live' : '') + (s.id === current ? ' current' : ''));
+    var unbuilt = s.built === false;
+    var a = el('a', 'librow' + (s.live ? ' is-live' : '') + (s.id === current ? ' current' : '') + (unbuilt ? ' unbuilt' : ''));
     a.href = '/s/' + encodeURIComponent(s.id) + '/';
     var status = s.sourceMissing
       ? '源日志已不在，正文读归档 · 最后同步 ' + agoText(s.idleMin)
       : (s.live ? '进行中' : '没在写') + ' · 最后写入 ' + agoText(s.idleMin);
-    a.title = s.title + '\n' + status + '\n' + s.cwd + '\n' + s.sid8 + ' · 标题来自 ' + (s.titleFrom === 'host' ? '桌面端' : s.titleFrom);
+    a.title = s.title + '\n' + status + '\n' + s.cwd + '\n' + s.sid8 + ' · 标题来自 ' + (s.titleFrom === 'host' ? '桌面端' : s.titleFrom === 'unbuilt' ? '未导入' : s.titleFrom);
     a.appendChild(el('i', 'dot'));
     var lt = el('div', 'lt');
     var tt = el('div', 'ltt');
     tt.appendChild(el('span', 't', s.title));
     if (s.id === current) tt.appendChild(el('span', 'chip', '本页'));
+    if (unbuilt) tt.appendChild(el('span', 'chip orgnone', '未导入'));
     var o = s.organize;
     if (o && o.level !== 'none') {
       var oc = el('span', 'chip ' + (o.level === 'full' ? 'orgfull' : 'orgpart'), o.level === 'full' ? '已整理' : '欠 ' + o.gaps);
@@ -2477,7 +2501,7 @@
     lt.appendChild(tt);
     lt.appendChild(el('div', 'lws', '工作区 · ' + (s.workspace || '无')));
     var meta = el('div', 'lmeta');
-    meta.appendChild(document.createTextNode(s.sid8 + ' · ' + s.segments + ' 段 · '
+    meta.appendChild(document.createTextNode(s.sid8 + ' · ' + (unbuilt ? '未建账 · 打开才建' : s.segments + ' 段') + ' · '
       + (s.sourceMissing ? '源已丢 · ' : '') + agoText(s.idleMin)));
     lt.appendChild(meta);
     a.appendChild(lt);
@@ -2530,7 +2554,7 @@
     }).join('|') + '|' + v.current;
   }
 
-  var LIB_SHOW = 5;
+  var LIB_SHOW = 3;
   var AGENT_ICON = {
     qoder: '/agent-icons/qoder.png',
     'claude-code': '/agent-icons/claude-code.png',
@@ -2572,6 +2596,7 @@
     var sig = libSig(v, q);
     if (sig === S.lib.drawn) return;
     S.lib.drawn = sig;
+    libBody.removeAttribute('aria-busy');
     libBody.textContent = '';
     var open = q ? null : libOpenSet();
     var total = 0, shown = 0;
@@ -2712,11 +2737,18 @@
     bar.appendChild(x);
   })();
 
+  // 首屏占位里先写一句能对上的数：只读 /health（两份 JSON），比 data.json 快得多。
+  fetch(BASE + '/health').then(function (r) { return r.json(); }).then(function (h) {
+    var l = document.querySelector('#bootskel .bslabel');
+    if (!l || !h) return;
+    if (h.building) l.textContent = '正在建账 · 首次打开这段会话…';
+    else if (h.segments) l.textContent = '正在载入 · ' + h.segments + ' 段';
+  }).catch(function () { /* 数拿不到就留原话 */ });
   poll();
 })();
 
-// 从项目页点「来源会话」进来时，带一条回去的路：只认本工具的 /p/<键>/ 地址，
-// 返回时把项目页的档位与选中原样带回去（项目页自己从 hash 恢复）。
+// 从项目工作台点「来源会话」进来时，带一条回去的路：只认本工具的 /p/<键>/ 地址，
+// 返回时把项目工作台的档位与选中原样带回去（项目页自己从 hash 恢复）。
 (function () {
   var from = new URLSearchParams(location.search).get('from');
   if (!from || !/^\/p\/p-[0-9a-f]{12}\/(#.*)?$/.test(from)) return;
@@ -2724,6 +2756,6 @@
   if (!nav) return;
   var a = document.createElement('a');
   a.href = from; a.textContent = '← 返回项目'; a.className = 'back-project';
-  a.title = '回到刚才的项目任务页（保留档位与选中）';
+  a.title = '回到刚才的项目工作台（保留档位与选中）';
   nav.insertBefore(a, nav.firstChild);
 })();
