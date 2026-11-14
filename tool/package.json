@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "description": "带锚点的会话结构账本 — 边聊边压、压完还能溯源回原文",
+  "license": "PolyForm-Shield-1.0.0",
+  "author": {
+    "name": "再来一杯海星酒",
+    "url": "https://github.com/zhl110"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zhl110/convledger.git"
+  },
   "type": "module",
   "bin": {
     "convledger": "bin/convledger.mjs"

@@ -1,62 +1,91 @@
-# convledger 许可条款 1.0
+# PolyForm Shield License 1.0.0
 
-版权所有 © 2026 zhl110（本仓库所有者）。保留所有权利。
+<https://polyformproject.org/licenses/shield/1.0.0>
 
-本软件（源码、文档与随附资源，下称「本软件」）按下述条款授权。**这不是一份开源许可**：它允许免费使用与修改，但限制售卖与对外分发。
+Required Notice: Copyright (c) 2026 再来一杯海星酒 (zhl110) — https://github.com/zhl110/convledger
 
-## 1. 你可以
+## Acceptance
 
-- **免费使用本软件的全部功能**，包括在个人或公司/组织内部使用。
-- 阅读源码，在自己的机器上运行。
-- **修改本软件（二创）**，用于自己或自己组织的内部用途。
+In order to get any license under these terms, you must agree to them as both strict obligations and conditions to all your licenses.
 
-## 2. 你必须
+## Copyright License
 
-- **把改动回传到上游**：任何修改版，在对内使用、部署或分享之前，须把完整改动以 Pull Request、补丁或仓库 Issue 附件的形式提交给上游仓库（本仓库）。作者自行决定是否合并。
-- **保留署名与许可**：保留本许可文件、版权声明与来源标识；修改版须显著写明「基于 convledger 修改」。
-- 若被要求，说明改动内容供作者了解。
+The licensor grants you a copyright license for the software to do everything you might do with the software that would otherwise infringe the licensor's copyright in it for any permitted purpose.  However, you may only distribute the software according to [Distribution License](#distribution-license) and make changes or new works based on the software according to [Changes and New Works License](#changes-and-new-works-license).
 
-## 3. 你不可以
+## Distribution License
 
-- **出售、出租、收费许可**本软件或其修改版。
-- **收费分发**本软件或其修改版，包括把修改版打包出售、按次/按量收费的托管服务，或把它作为付费产品的主要价值对外提供。
-- 分享**未按第 2 条回传**的修改版（见下面「允许的非商业分享」）。
-- 移除或隐藏版权、许可与来源标识。
-- 用本软件或其修改版申请专利、商标，或宣称获得官方支持。
+The licensor grants you an additional copyright license to distribute copies of the software.  Your license to distribute covers distributing the software with changes and new works permitted by [Changes and New Works License](#changes-and-new-works-license).
 
-### 允许的非商业分享
+## Notices
 
-你可以把**未修改**的本软件，或**已按第 2 条回传且被上游合并**的修改版，以非商业方式分享给他人（含镜像、重新打包）：
+You must ensure that anyone who gets a copy of any part of the software from you also gets a copy of these terms or the URL for them above, as well as copies of any plain-text lines beginning with `Required Notice:` that the licensor provided with the software.  For example:
 
-- 不收取任何费用，也不附带付费服务；
-- 保留 `LICENSE.md`、版权声明与来源标识；
-- 分享的若是修改版，须已回传并被上游合并。
+> Required Notice: Copyright Yoyodyne, Inc. (http://example.com)
 
-## 4. 未回传的后果
+## Changes and New Works License
 
-未按第 2 条把改动提交回上游的修改版，其使用许可自动终止；继续使用即构成侵权。
+The licensor grants you an additional copyright license to make changes and new works based on the software for any permitted purpose.
 
-## 5. 免责声明
+## Patent License
 
-本软件按「现状」提供，不附带任何明示或默示的担保，包括但不限于适销性、特定用途适用性与不侵权担保。作者不对使用本软件产生的任何直接或间接损失承担责任。
+The licensor grants you a patent license for the software that covers patent claims the licensor can license, or becomes able to license, that you would infringe by using the software.
 
-- **代码可见/可用不等于作者兜底**：本项目仅供学习与自用，使用者自行承担使用风险。
-- 本软件会读取本机会话日志、在本机起本地服务，并可选地注册会执行命令的 hooks。请只在本机使用；把它暴露到公网、或不加甄别地处理不信任数据的后果由使用者承担。
-- **赞赏属于自愿捐赠**：不承诺 bug 修复、技术支持或售后。
-- **不得用于任何违规用途**：使用者对自己的行为负责；因使用本软件引起的任何责任由使用者承担。
+## Noncompete
 
-## 6. 终止
+Any purpose is a permitted purpose, except for providing any product that competes with the software or any product the licensor or any of its affiliates provides using the software.
 
-违反本条款任意一条，全部授权自动终止。作者书面同意或违约行为完成补正后，授权可恢复。
+## Competition
 
-## 7. 其他
+Goods and services compete even when they provide functionality through different kinds of interfaces or for different technical platforms.  Applications can compete with services, libraries with plugins, frameworks with development tools, and so on, even if they're written in different programming languages or for different computer architectures.  Goods and services compete even when provided free of charge.  If you market a product as a practical substitute for the software or another product, it definitely competes.
 
-- 本条款不排除你所在司法辖区的强制性法律规定；如与此类规定冲突，以法律为准。
-- 条款以**中文文本**为准。
-- 作者保留未来发布新版本条款的权利；新版本只管发布之后的分发与使用。
+## New Products
 
----
+If you are using the software to provide a product that does not compete, but the licensor or any of its affiliates brings your product into competition by providing a new version of the software or another product using the software, you may continue using versions of the software available under these terms beforehand to provide your competing product, but not any later versions.
 
-## English notice (non-binding summary)
+## Discontinued Products
 
-convledger is **source-available, not open source**. You may use all of its features for free and modify it for your own or your organization's internal use. You may **not sell, license, redistribute or otherwise provide** the software or a modified version to any third party. Any modification must be **contributed back** to the upstream repository as a pull request or patch before use. Uncontributed modifications terminate the license. The Chinese text above is controlling.
+You may begin using the software to compete with a product or service that the licensor or any of its affiliates has stopped providing, unless the licensor includes a plain-text line beginning with `Licensor Line of Business:` with the software that mentions that line of business.  For example:
+
+> Licensor Line of Business: YoyodyneCMS Content Management System (http://example.com/cms)
+
+## Sales of Business
+
+If the licensor or any of its affiliates sells a line of business developing the software or using the software to provide a product, the buyer can also enforce [Noncompete](#noncompete) for that product.
+
+## Fair Use
+
+You may have "fair use" rights for the software under the law. These terms do not limit them.
+
+## No Other Rights
+
+These terms do not allow you to sublicense or transfer any of your licenses to anyone else, or prevent the licensor from granting licenses to anyone else.  These terms do not imply any other licenses.
+
+## Patent Defense
+
+If you make any written claim that the software infringes or contributes to infringement of any patent, your patent license for the software granted under these terms ends immediately. If your company makes such a claim, your patent license ends immediately for work on behalf of your company.
+
+## Violations
+
+The first time you are notified in writing that you have violated any of these terms, or done anything with the software not covered by your licenses, your licenses can nonetheless continue if you come into full compliance with these terms, and take practical steps to correct past violations, within 32 days of receiving notice.  Otherwise, all your licenses end immediately.
+
+## No Liability
+
+***As far as the law allows, the software comes as is, without any warranty or condition, and the licensor will not be liable to you for any damages arising out of these terms or the use or nature of the software, under any kind of legal claim.***
+
+## Definitions
+
+The **licensor** is the individual or entity offering these terms, and the **software** is the software the licensor makes available under these terms.
+
+A **product** can be a good or service, or a combination of them.
+
+**You** refers to the individual or entity agreeing to these terms.
+
+**Your company** is any legal entity, sole proprietorship, or other kind of organization that you work for, plus all its affiliates.
+
+**Affiliates** means the other organizations than an organization has control over, is under the control of, or are under common control with.
+
+**Control** means ownership of substantially all the assets of an entity, or the power to direct its management and policies by vote, contract, or otherwise.  Control can be direct or indirect.
+
+**Your licenses** are all the licenses granted to you for the software under these terms.
+
+**Use** means anything you do with the software requiring one of your licenses.

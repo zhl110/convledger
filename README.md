@@ -198,7 +198,7 @@ docs/img/                   README 用的图
 
 ## 许可
 
-源码可见：**免费使用全部功能、允许二创、允许非商业分享；不可以售卖或收费分发**；二创必须把改动提交回本仓，未回传的修改版不许分享。完整条款见 [LICENSE.md](LICENSE.md)——注意这不是 OSI 开源许可。
+源码可见，采用 **PolyForm Shield License 1.0.0**：**免费使用全部功能、允许二创与非竞争性分发**；**不可以提供与 convledger 竞争的产品**；分发时必须随附本许可与 `Required Notice`。完整条款见 [LICENSE.md](LICENSE.md)——这是 PolyForm 的源码可见许可，不是 OSI 开源许可。
 
 ## 数据与隐私
 

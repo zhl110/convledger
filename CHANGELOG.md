@@ -7,6 +7,14 @@
 
 ---
 
+## 2026-11-14 · 公开仓改为 PolyForm Shield 1.0.0
+
+### Changed
+
+- 公开仓 `LICENSE.md` 从自定义源码可见条款换成 [PolyForm Shield License 1.0.0](https://polyformproject.org/licenses/shield/1.0.0)，并写入 `Required Notice`。
+- 允许免费使用、修改与非竞争性分发；不得提供与 convledger 竞争的产品；分发须随附本许可与 `Required Notice`。
+- README 许可段与 `tool/package.json` 的 `license` 字段同步。这是 PolyForm 的源码可见许可，不是 OSI 开源许可。
+
 ## 2026-11-09 · 清理对外文案里对其它产品的引用
 
 ### Changed
